@@ -32,7 +32,7 @@ class OfficialPortal(
     private val onVisible: (Boolean, String) -> Unit,
     private val onRendererGone: () -> Unit
 ) {
-    enum class Purpose { HOME, LOGIN, PLAY }
+    enum class Purpose { HOME, LOGIN, QR_LOGIN, PLAY }
     private val handler = Handler(Looper.getMainLooper())
     private val assets = mutableMapOf<String, String>()
     private val requests = linkedMapOf<String, Boolean>()
@@ -43,6 +43,8 @@ class OfficialPortal(
     private var foreground = true
     private var hasMessageListener = false
     private var waitingHome: (() -> Unit)? = null
+    private var qrRequest = ""
+    private var qrAuthorized = false
     var purpose = Purpose.HOME
         private set
     var animeId = ""
@@ -141,6 +143,11 @@ class OfficialPortal(
                         waitingHome?.also { waitingHome = null; it() }
                     }
                     Purpose.LOGIN -> run(script("account-sync").replace("__BAHA_WATCH_ACCOUNT__", "true"), sticky = true)
+                    Purpose.QR_LOGIN -> {
+                        if (qrAuthorized) {
+                            run(script("account-sync").replace("__BAHA_WATCH_ACCOUNT__", "false"))
+                        } else refreshQrLogin()
+                    }
                     Purpose.PLAY -> installPlayer(url)
                 }
             }
@@ -199,6 +206,7 @@ class OfficialPortal(
 
     fun home() {
         if (destroyed) return
+        cancelQrLogin()
         purpose = Purpose.HOME
         animeId = ""
         videoId = ""
@@ -207,13 +215,50 @@ class OfficialPortal(
         webView.loadUrl(OfficialSite.HOME)
     }
     fun login() {
+        cancelQrLogin()
         purpose = Purpose.LOGIN
         ready = false
         onVisible(true, "login")
         webView.loadUrl(OfficialSite.ACCOUNT)
     }
+    fun qrLogin() {
+        if (destroyed) return
+        cancelQrLogin()
+        purpose = Purpose.QR_LOGIN
+        ready = false
+        webView.loadUrl(OfficialSite.HOME)
+    }
+    fun refreshQrLogin() {
+        if (destroyed || purpose != Purpose.QR_LOGIN) return
+        if (!ready || !OfficialSite.trusted(webView.url.orEmpty()) || qrAuthorized) {
+            qrLogin()
+            return
+        }
+        cancelQrLogin()
+        evaluate("window.__bahaMediaSuspended=${!foreground};")
+        qrRequest = run(script("qr-login"), sticky = true)
+    }
+    fun completeQrLogin() {
+        if (destroyed || purpose != Purpose.QR_LOGIN || qrAuthorized) return
+        cancelQrLogin()
+        qrAuthorized = true
+        CookieManager.getInstance().flush()
+        ready = false
+        // Read a fresh official account page before the native UI accepts login.
+        webView.loadUrl(OfficialSite.HOME)
+    }
+    private fun cancelQrLogin() {
+        if (qrRequest.isNotEmpty()) {
+            requests.remove(qrRequest)
+            completed.remove(qrRequest)
+            qrRequest = ""
+            evaluate("window.__bahaQrLogin?.dispose();")
+        }
+        qrAuthorized = false
+    }
     fun play(series: String, video: String) {
         require(OfficialSite.validId(series) && OfficialSite.validId(video))
+        cancelQrLogin()
         purpose = Purpose.PLAY
         animeId = series
         videoId = video
@@ -228,7 +273,7 @@ class OfficialPortal(
         home()
     }
     fun syncAccount() {
-        if (ready && purpose != Purpose.PLAY) {
+        if (ready && purpose in setOf(Purpose.HOME, Purpose.LOGIN)) {
             run(script("account-sync").replace("__BAHA_WATCH_ACCOUNT__", (purpose == Purpose.LOGIN).toString()),
                 sticky = purpose == Purpose.LOGIN)
         }
@@ -310,6 +355,7 @@ class OfficialPortal(
         if (destroyed) return
         if (active) webView.onResume() else webView.onPause()
         evaluate("window.__bahaMediaSuspended=${!active};window.__bahaPlayerBridge?.${if (active) "resume" else "suspend"}();")
+        if (purpose == Purpose.QR_LOGIN) evaluate("window.__bahaQrLogin?.${if (active) "resume" else "pause"}();")
     }
     fun destroy() {
         if (destroyed) {
@@ -361,6 +407,7 @@ class OfficialPortal(
             val operation = body.optString("requestId")
             if (body.optString("document") != document || !requests.containsKey(operation)) return
             val type = body.optString("type")
+            if (type.startsWith("qr-login-") && (purpose != Purpose.QR_LOGIN || operation != qrRequest)) return
             if (purpose == Purpose.PLAY && type in setOf("player-state", "player-detail", "native-source")) {
                 if (body.optString("id") != animeId || body.optString("videoId") != videoId) return
             }

@@ -39,6 +39,7 @@ import app.bahaplus.tv.player.NativePlayback
 import app.bahaplus.tv.ui.CatalogAdapter
 import app.bahaplus.tv.ui.CatalogRow
 import app.bahaplus.tv.ui.RemoteCursor
+import app.bahaplus.tv.ui.QrLoginView
 import app.bahaplus.tv.ui.TvStyle
 import org.json.JSONObject
 
@@ -106,6 +107,7 @@ class MainActivity : Activity() {
     }
     private var primaryContent: View? = null
     private var activeDialog: AlertDialog? = null
+    private var qrLoginView: QrLoginView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -225,7 +227,7 @@ class MainActivity : Activity() {
         }
     }
     private fun render(restoreFocus: Boolean = true) {
-        if (!::content.isInitialized || native != null || playingVideo.isNotEmpty() || browserVisible) return
+        if (!::content.isInitialized || native != null || playingVideo.isNotEmpty() || browserVisible || qrLoginView != null) return
         val restoreContentFocus = restoreFocus && content.hasFocus()
         shell.visibility = View.VISIBLE
         playerLayer.visibility = View.GONE
@@ -667,6 +669,7 @@ class MainActivity : Activity() {
         browser.isFocusableInTouchMode = visible
         browserPane.importantForAccessibility = if (visible) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         if (visible) {
+            closeQrLogin()
             browserPane.bringToFront()
             browserDone.text = if (reason == "play") tr("返回详情", "返回詳情") else tr("完成登录 / 验证", "完成登入 / 驗證")
             browserTitle.text = when (reason) {
@@ -684,7 +687,21 @@ class MainActivity : Activity() {
     }
     private fun login() {
         if (!portalAvailable) { showNotice(tr("系统 WebView 不可用", "系統 WebView 無法使用")); return }
-        portal.login()
+        closeQrLogin()
+        qrLoginView = QrLoginView(this, preferences,
+            onRefresh = { portal.refreshQrLogin() },
+            onWebLogin = { closeQrLogin(); portal.login() },
+            onCancel = ::cancelQrLogin)
+        root.addView(qrLoginView, FrameLayout.LayoutParams(-1, -1))
+        portal.qrLogin()
+    }
+    private fun closeQrLogin() {
+        qrLoginView?.let { view -> view.dispose(); root.removeView(view) }
+        qrLoginView = null
+    }
+    private fun cancelQrLogin() {
+        closeQrLogin()
+        if (portalAvailable) portal.finishLogin()
     }
     private fun accountAction() {
         if (accountId == null) login()
@@ -720,6 +737,16 @@ class MainActivity : Activity() {
         if (isFinishing || isDestroyed) return
         runCatching {
             when (body.optString("type")) {
+                "qr-login-ready" -> if (qrLoginView != null && portal.purpose == OfficialPortal.Purpose.QR_LOGIN) {
+                    qrLoginView?.ready(QrLoginCode.parse(body))
+                }
+                "qr-login-retrying" -> qrLoginView?.retrying()
+                "qr-login-expired" -> qrLoginView?.error(expired = true)
+                "qr-login-error" -> qrLoginView?.error()
+                "qr-login-complete" -> if (qrLoginView != null) {
+                    qrLoginView?.authorizing()
+                    portal.completeQrLogin()
+                }
                 "catalog" -> {
                     val items = body.getJSONArray("items")
                     require(items.length() <= 5000)
@@ -756,6 +783,7 @@ class MainActivity : Activity() {
                     else if (detailsOpen || tab in setOf("home", "favorites", "history")) render()
                 }
                 "account-guest" -> {
+                    if (qrLoginView != null) qrLoginView?.error()
                     accountId = null
                     accountName = ""
                     accountSynced = false
@@ -791,13 +819,17 @@ class MainActivity : Activity() {
                 "native-source" -> acceptSource(body)
                 "verification-required" -> showNotice(tr("完成官网验证后，请重试刚才的操作。", "完成官網驗證後，請重試剛才的操作。"))
                 "account-error" -> {
+                    qrLoginView?.error()
                     accountSynced = false
                     showNotice(tr("官方账号同步暂不可用，请稍后刷新。", "官方帳號同步暫時無法使用，請稍後重新整理。"))
                 }
                 "authorization-lost" -> playbackError("official-document-changed")
-                "search-error", "detail-error", "favorite-error", "operation-error", "navigation-error", "data-error" -> operationError(body)
+                "search-error", "detail-error", "favorite-error", "operation-error", "navigation-error", "data-error" -> {
+                    if (qrLoginView != null) qrLoginView?.error() else operationError(body)
+                }
             }
         }.onFailure {
+            qrLoginView?.error()
             lastError = "official-data-invalid"
             busy = false
             showNotice(tr("官方内容格式已变化，请刷新或完成官网验证。", "官方內容格式已變更，請重新整理或完成官網驗證。"))
@@ -815,6 +847,10 @@ class MainActivity : Activity() {
         accountId = id
         accountName = name
         updateAccount()
+        if (qrLoginView != null && portal.purpose == OfficialPortal.Purpose.QR_LOGIN) {
+            closeQrLogin()
+            portal.finishLogin()
+        }
     }
     private fun operationError(body: JSONObject) {
         val request = body.optString("requestId")
@@ -826,6 +862,7 @@ class MainActivity : Activity() {
         showNotice(tr("请求未完成。请刷新重试，必要时完成官网验证。", "請求未完成。請重新整理重試，必要時完成官網驗證。"))
     }
     private fun onRendererGone() {
+        closeQrLogin()
         native?.release()
         native = null
         playingVideo = ""
@@ -943,7 +980,9 @@ class MainActivity : Activity() {
     @SuppressLint("GestureBackNavigation")
     override fun onBackPressed() { back() }
     private fun back() {
-        if (browserVisible) {
+        if (qrLoginView != null) {
+            cancelQrLogin()
+        } else if (browserVisible) {
             if (cursor.active) { cursor.active = false; browserDone.requestFocus() }
             else if (playingVideo.isNotEmpty()) exitPlayback() else portal.finishLogin()
         } else if (playingVideo.isNotEmpty()) {
@@ -980,6 +1019,7 @@ class MainActivity : Activity() {
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) detailCache.clear()
     }
     override fun onDestroy() {
+        closeQrLogin()
         activeDialog?.dismiss()
         native?.release()
         native = null
