@@ -1,0 +1,234 @@
+name: Android release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '版本标签，例如 v0.1.1 或 v0.1.1-rc.1'
+        required: true
+        type: string
+      version_code:
+        description: '可选：覆盖 APK versionCode；正式升级时必须递增'
+        required: false
+        type: string
+      publish:
+        description: '发布到 GitHub Releases；关闭时仅构建并上传 Artifacts'
+        default: false
+        type: boolean
+      prerelease:
+        description: '标记为预发布；带版本后缀的标签始终视为预发布'
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Check, build and sign APK
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      ANDROID_BUILD_TOOLS: '35.0.0'
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      artifact_name: ${{ steps.metadata.outputs.artifact_name }}
+      publish: ${{ steps.metadata.outputs.publish }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release metadata
+        id: metadata
+        env:
+          REQUESTED_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+          REQUESTED_VERSION_CODE: ${{ inputs.version_code }}
+          SHOULD_PUBLISH: ${{ github.ref_type == 'tag' || inputs.publish }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          tag = os.environ["REQUESTED_TAG"]
+          version = r"(0|[1-9][0-9]*)"
+          suffix = r"(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?"
+          if not re.fullmatch(rf"v{version}\.{version}\.{version}{suffix}", tag) or len(tag) > 100:
+              raise SystemExit("Use a version tag such as v0.1.1 or v0.1.1-rc.1.")
+          code = os.environ["REQUESTED_VERSION_CODE"]
+          if code and (not re.fullmatch(r"[1-9][0-9]{0,9}", code) or int(code) > 2100000000):
+              raise SystemExit("version_code must be an integer from 1 to 2100000000.")
+          publish = os.environ["SHOULD_PUBLISH"] == "true"
+          if publish:
+              subprocess.run(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], check=True)
+              existing = subprocess.run(
+                  ["git", "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}"],
+                  capture_output=True, text=True,
+              )
+              head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+              if existing.returncode == 0 and existing.stdout.strip() != head:
+                  raise SystemExit("The requested tag already points to a different commit.")
+          prerelease = os.environ["IS_PRERELEASE"] == "true" or "-" in tag
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"tag={tag}\nartifact_name=BahaPlusTV-{tag[1:]}\n")
+              output.write(f"publish={str(publish).lower()}\nprerelease={str(prerelease).lower()}\n")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(f"RELEASE_VERSION_NAME={tag[1:]}\nRELEASE_VERSION_CODE={code}\n")
+          PY
+
+      - name: Set up Java
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Set up Gradle and validate Wrapper
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: basic
+
+      - name: Install Android SDK components
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;$ANDROID_BUILD_TOOLS"
+
+      - name: Check adapters and project resources
+        run: |
+          node --test tests/*.test.cjs
+          python3 tools/check-project.py
+
+      - name: Test, lint and build release APK
+        run: |
+          args=("-PreleaseVersionName=$RELEASE_VERSION_NAME")
+          if [[ -n "$RELEASE_VERSION_CODE" ]]; then
+            args+=("-PreleaseVersionCode=$RELEASE_VERSION_CODE")
+          fi
+          ./gradlew --no-daemon --console=plain \
+            testReleaseUnitTest lintRelease assembleRelease "${args[@]}"
+
+      - name: Sign and verify release APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          for variable in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!variable}" ]]; then
+              echo "::error::Missing Actions secret: $variable"
+              exit 1
+            fi
+          done
+          keystore="$RUNNER_TEMP/baha-plus-release.p12"
+          trap 'rm -f -- "$keystore"' EXIT
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
+          mkdir -p artifacts
+          apk="artifacts/BahaPlusTV-$RELEASE_VERSION_NAME-release.apk"
+          "$tools/zipalign" -P 16 -f -v 4 \
+            app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" sign \
+            --ks "$keystore" --ks-type PKCS12 \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --key-pass env:ANDROID_KEY_PASSWORD \
+            --out "$apk" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" verify --verbose --print-certs "$apk"
+          "$tools/zipalign" -c -P 16 -v 4 "$apk"
+          (
+            cd artifacts
+            sha256sum "BahaPlusTV-$RELEASE_VERSION_NAME-release.apk" \
+              > "BahaPlusTV-$RELEASE_VERSION_NAME-release.apk.sha256"
+            sha256sum --check "BahaPlusTV-$RELEASE_VERSION_NAME-release.apk.sha256"
+          )
+          notes="docs/release-notes-$RELEASE_VERSION_NAME.md"
+          if [[ -f "$notes" ]]; then
+            cp "$notes" artifacts/release-notes.md
+          fi
+
+      - name: Upload signed APK and checksums
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.metadata.outputs.artifact_name }}
+          path: |
+            artifacts/*.apk
+            artifacts/*.sha256
+            artifacts/release-notes.md
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload test, lint and obfuscation reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            app/build/reports/
+            app/build/test-results/
+            app/build/outputs/mapping/release/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.build.outputs.tag }}
+      ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
+      IS_PRERELEASE: ${{ needs.build.outputs.prerelease }}
+    steps:
+      - name: Download verified APK
+        run: |
+          gh run download "$GITHUB_RUN_ID" --name "$ARTIFACT_NAME" --dir artifacts
+          cd artifacts
+          sha256sum --check ./*.sha256
+
+      - name: Create release with APK and checksums
+        run: |
+          args=(
+            "$RELEASE_TAG"
+            artifacts/*.apk artifacts/*.sha256
+            --target "$GITHUB_SHA"
+            --title "Baha Plus TV $RELEASE_TAG"
+            --draft
+          )
+          if [[ -f artifacts/release-notes.md ]]; then
+            args+=(--notes-file artifacts/release-notes.md)
+          else
+            args+=(--generate-notes)
+          fi
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${args[@]}"
+          gh release edit "$RELEASE_TAG" --draft=false

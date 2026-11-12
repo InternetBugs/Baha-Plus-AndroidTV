@@ -110,6 +110,10 @@ python tools/check-project.py
 
 JVM 测试位于 `app/src/test`，覆盖 URL 来源、原生播放清单、进度边界与扫码授权链接；只有 Android 构建任务成功执行后才能报告其结果。
 
+## GitHub Actions 发版
+
+`Android release` 工作流支持推送 `v*` 标签自动发版，也可在 Actions 页面选择 `main` 手动运行。手动运行默认仅构建，开启 `publish` 后才发布到 GitHub Releases。流程执行测试、Lint、Release APK 构建、固定密钥签名和 SHA-256 校验，并上传 APK 与检查报告。签名 Secret、版本号和发布说明的配置见 [发版说明](docs/releasing.md)。
+
 安装与完整验收见 [验收清单](docs/acceptance.md)，已确认的产品约束见 [实现规格](docs/specification.md)。
 
 ## 开源与会话边界
