@@ -2,6 +2,7 @@ package app.bahaplus.tv.player
 
 import android.app.AlertDialog
 import android.content.Context
+import android.content.res.ColorStateList
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -9,6 +10,8 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -63,7 +66,7 @@ class NativePlayback(
         max = 1000
         progressTintList = android.content.res.ColorStateList.valueOf(TvStyle.focus)
     }
-    private lateinit var playButton: TextView
+    private lateinit var playButton: ImageButton
     private lateinit var qualityButton: TextView
     private lateinit var speedButton: TextView
     private val status = TvStyle.label(context, tr("正在准备播放", "正在準備播放"), 21f).apply {
@@ -121,24 +124,44 @@ class NativePlayback(
         player.setPlaybackSpeed(preferences.speed)
         controls.addView(heading)
         controls.addView(timeline, LinearLayout.LayoutParams(-1, -2).apply { topMargin = TvStyle.dp(context, 7) })
-        controls.addView(progress, LinearLayout.LayoutParams(-1, TvStyle.dp(context, 5)).apply {
-            topMargin = TvStyle.dp(context, 10)
-            bottomMargin = TvStyle.dp(context, 13)
-        })
-        val row = TvStyle.horizontal(context)
-        fun action(text: String, block: () -> Unit): TextView {
+        val playbackRow = TvStyle.horizontal(context)
+        val optionsRow = TvStyle.horizontal(context)
+        fun action(row: LinearLayout, text: String, block: () -> Unit): TextView {
             val button = TvStyle.button(context, text) { block(); scheduleHide() }
             row.addView(button, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(3, 0, 3, 0) })
             return button
         }
-        action(tr("退 10 秒", "退 10 秒")) { seek(-10000) }
-        playButton = action(tr("暂停", "暫停")) { toggle() }
-        action(tr("进 10 秒", "進 10 秒")) { seek(10000) }
-        qualityButton = action(qualityLabel()) { chooseQuality() }
-        speedButton = action("${preferences.speed}×") { chooseSpeed() }
-        action(tr("选集", "選集")) { chooseEpisode() }
-        action(tr("返回", "返回")) { onExit() }
-        controls.addView(row)
+        fun iconAction(icon: Int, description: String, block: () -> Unit): ImageButton {
+            val button = ImageButton(context).apply {
+                id = View.generateViewId()
+                isFocusable = true
+                isFocusableInTouchMode = true
+                isClickable = true
+                contentDescription = description
+                setImageResource(icon)
+                imageTintList = ColorStateList.valueOf(TvStyle.text)
+                scaleType = ImageView.ScaleType.CENTER
+                background = TvStyle.focusBackground(context)
+                setOnClickListener { block(); scheduleHide() }
+            }
+            playbackRow.addView(button, LinearLayout.LayoutParams(0, TvStyle.dp(context, 44), 1f).apply {
+                setMargins(3, 0, 3, 0)
+            })
+            return button
+        }
+        iconAction(R.drawable.ic_replay_10, tr("后退 10 秒", "後退 10 秒")) { seek(-10000) }
+        playButton = iconAction(R.drawable.ic_play, tr("播放", "播放")) { toggle() }
+        iconAction(R.drawable.ic_forward_10, tr("快进 10 秒", "快進 10 秒")) { seek(10000) }
+        controls.addView(playbackRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = TvStyle.dp(context, 10) })
+        controls.addView(progress, LinearLayout.LayoutParams(-1, TvStyle.dp(context, 5)).apply {
+            topMargin = TvStyle.dp(context, 10)
+            bottomMargin = TvStyle.dp(context, 13)
+        })
+        qualityButton = action(optionsRow, qualityLabel()) { chooseQuality() }
+        speedButton = action(optionsRow, "${preferences.speed}×") { chooseSpeed() }
+        action(optionsRow, tr("选集", "選集")) { chooseEpisode() }
+        action(optionsRow, tr("返回", "返回")) { onExit() }
+        controls.addView(optionsRow)
         view.addView(controls, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         view.addView(status, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
         player.addListener(object : Player.Listener {
@@ -153,7 +176,8 @@ class NativePlayback(
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 view.keepScreenOn = isPlaying
-                playButton.text = if (isPlaying) tr("暂停", "暫停") else tr("播放", "播放")
+                playButton.setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
+                playButton.contentDescription = if (isPlaying) tr("暂停", "暫停") else tr("播放", "播放")
                 if (committed && !released) {
                     if (!isPlaying && player.playbackState != Player.STATE_ENDED) showControls()
                     else scheduleHide()
