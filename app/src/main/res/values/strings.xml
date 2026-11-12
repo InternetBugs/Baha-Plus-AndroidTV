@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Baha Plus TV</string>
+    <string name="playback_timeline">%1$s / %2$s</string>
+    <string name="playback_speed">%1$s×</string>
+</resources>

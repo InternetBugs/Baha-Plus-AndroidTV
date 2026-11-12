@@ -1,0 +1,18 @@
+Baha Plus TV
+
+The official-site adapters and search conversion data are derived from Baha-Plus
+(InternetBugs, reference checkout 0780ccd, inspected 2026-11-12).
+The upstream MIT copyright and license are preserved in LICENSE and packaged as
+app/src/main/assets/LICENSE.
+
+TV-specific changes include keeping the official controls accessible before the
+native video handoff, native navigation, bounded image loading, TV search and
+favorite commands, and remote cursor navigation.
+
+Gradle Wrapper 8.14.3 is distributed under Apache License 2.0.
+Its official JAR SHA-256:
+7d3a4ac4de1c32b59bc6a4eb8ecb8e612ccd0cf1ae1e99f66902da64df296172
+
+AndroidX RecyclerView, WebKit and Media3 are distributed under Apache License 2.0.
+Kotlin runtime is distributed under Apache License 2.0.
+No upstream bundled font files or liquid-glass libraries are included.

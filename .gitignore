@@ -1,0 +1,13 @@
+.gradle/
+.kotlin/
+.tools/
+**/build/
+local.properties
+*.jks
+*.keystore
+*.hprof
+.idea/
+captures/
+artifacts/*.apk
+artifacts/*.sha256
+artifacts/emulator/

@@ -1,0 +1,112 @@
+# Baha Plus TV
+
+面向低性能安卓电视与电视盒子的巴哈姆特动画疯第三方客户端。使用 Kotlin、Android 原生 View／RecyclerView 与 Media3，支持方向键、确认键和返回键操作。最低系统以 Android 7.0／API 24 为基线。
+
+本项目依据 Baha-Plus 的业务与官网适配器实现，保留其 MIT 许可证。界面为电视重新设计，使用系统字体、静态海报、清晰焦点和固定侧栏。
+
+## 当前验证状态
+
+- 已有原生工程及首页、搜索、详情选集、登录、追番、历史、播放和设置源码。
+- 适配器离线测试、JavaScript 语法、XML／JSON、TV 启动声明、许可证及 Wrapper 校验已通过。
+- Android 编译、4 项 JVM 单元测试、Lint 与调试 APK 生成已通过；Lint 为 0 错误、6 项非阻断警告。
+- 已核验 APK 签名、对齐、API 24 最低版本及 TV 启动入口；APK 未包含原生 `.so` 库，没有仅限 64 位的打包限制。详见 [构建验证记录](docs/build-validation.md)。
+- 已在当前 Windows 电脑的 Android TV 模拟器上完成首页、遥控搜索、详情选集、官方年龄确认与广告、原生正片播放及基础控制测试，并修复焦点恢复和遥控光标定位问题。环境、结果及未覆盖项见 [模拟器测试记录](docs/emulator-validation.md)；运行截图和日志保留在本机，不提交到仓库。
+- 目标电视尚未连接；登录、官方验证、硬件解码、进度同步和整集播放均未通过真机验收。不能据此声称已能稳定播放。
+
+当前可侧载测试包：[0.1.0 测试版下载](https://github.com/InternetBugs/Baha-Plus-AndroidTV/releases/tag/v0.1.0)，APK 大小 6,452,064 字节，使用调试签名。Release 附带 SHA-256 校验文件；本机构建产物保存在 `artifacts/`，不提交 APK 二进制到 Git 历史。
+
+## 首版范围
+
+| 项目 | 行为 |
+| --- | --- |
+| 首页 | 左侧导航、海报网格；官方历史中的继续观看优先展示 |
+| 搜索 | 官方搜索接口，合并简体输入与繁体转换后的结果 |
+| 详情 | 官方简介、制作信息与虚拟化选集列表 |
+| 账号 | 单账号，官方网页登录；必要时用遥控光标操作网页 |
+| 追番 | 经官方页面控件更新，成功后重新读取官方收藏 |
+| 历史 | 从官方会话读取；不建立独立本地续播记录 |
+| 正片 | 官方网页完成广告、年龄、账号及地区验证后交给 Media3 |
+| 同步 | 将原生播放器的实际时间回传给官方回调；会话拒绝或失联时暂停 |
+| 连播 | 默认自动播放同一作品下一集，可关闭 |
+| 画质 | 默认自动，可选当前会话允许的画质并保存偏好 |
+| 语言 | 默认简体中文，可切换繁体；片名与简介保留官方原文 |
+
+弹幕、下载、投屏和评论互动不在本次首版实现范围。会员、地区、设备与广告策略由原站处理。
+
+## 遥控器
+
+播放控制条隐藏时：
+
+- 确认：播放／暂停。
+- 左／右：每次快退／快进 10 秒。
+- 上／下：显示控制条。
+
+控制条显示后，方向键移动焦点，确认执行操作。返回先收起控制条或选集面板，再返回详情。详情返回列表时恢复选中位置。
+
+登录／验证页面顶部提供完成、刷新及遥控光标入口。光标模式用方向键移动、确认点击、返回退出；移到页面上／下边缘继续按方向键可以滚动。输入使用电视系统键盘。官方验证码、两步验证与具体电视输入法的可操作性仍需实机验证。
+
+## 低资源模式
+
+默认开启：
+
+- 海报内存缓存 8 MiB、磁盘缓存 12 MiB；通常模式为 20／32 MiB。
+- 图片按目标尺寸采样，使用 RGB565；解码与网络在受限工作队列执行。
+- RecyclerView 复用卡片，减少预取与离屏缓存，关闭列表动画。
+- 正片接管后卸载网页媒体源和多余 DOM，保留官方政策与进度回调。
+- Media3 不保留回看缓冲，缓冲目标字节为 16 MiB；通常模式为 32 MiB。
+- 不请求后台播放服务；应用进入后台时暂停。
+
+这些是资源预算配置，不代表已经测得的进程内存或帧率。系统 WebView、解码器和图形缓冲另有开销。低资源模式与视频画质独立。
+
+## 构建
+
+需要 JDK 17 或 21、Android SDK Platform 36 与 Build Tools 35.0.0。Gradle Wrapper 固定为 8.14.3，并校验分发包。
+
+已有 SDK 时，在项目根目录新建不提交的 `local.properties`：
+
+```properties
+sdk.dir=D\:/Android/Sdk
+```
+
+Windows PowerShell：
+
+```powershell
+.\tools\Build.ps1
+```
+
+构建脚本执行 `testDebugUnitTest lintDebug assembleDebug`，将调试 APK 与 SHA-256 复制到 `artifacts/`。优先使用已有 Gradle 分发包；构建缓存和 Android 用户目录放在项目 `.tools/` 下。
+
+需要下载项目专用 SDK 时，先审阅 [初始化脚本](tools/Bootstrap-Android.ps1)：
+
+```powershell
+.\tools\Bootstrap-Android.ps1
+```
+
+脚本从 Google 官方源下载并校验命令行工具，在 `.tools/android-sdk` 下安装编译所需组件，并在终端提示 SDK 许可。明确接受这些许可后，可使用 `-AcceptSdkLicenses` 自动回答。脚本不修改系统 PATH，不创建系统任务。
+
+也可以使用标准 Wrapper：
+
+```powershell
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug
+```
+
+当前依赖没有配置仅限 64 位的 ABI 过滤；打包时应检查 APK 中任何新增原生库是否同时提供 `armeabi-v7a`。首要目标设备是 32 位运行环境。
+
+## 离线检查
+
+需要 Node.js 18+ 与 Python 3：
+
+```powershell
+node --test tests/adapters.test.cjs
+python tools/check-project.py
+```
+
+JVM 测试位于 `app/src/test`，覆盖 URL 来源、原生播放清单与进度边界；只有 Android 构建任务成功执行后才能报告其结果。
+
+安装与完整验收见 [验收清单](docs/acceptance.md)，已确认的产品约束见 [实现规格](docs/specification.md)。
+
+## 开源与会话边界
+
+官网适配器来自 Baha-Plus，移植时修改了 TV 广告控件的显示行为；TV 搜索、追番命令与方向导航另行实现。原项目 MIT 许可随源码与 APK 一起分发，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
+
+WebView 消息只接受官方来源的主框架，并校验文档与请求标识；旧 WebView 使用主框架队列，不添加对所有 iframe 暴露的 JavaScriptInterface。主页面导航限制为官方 HTTPS 域名，原生 HLS 源限制为当前授权会话中的指定 CDN。应用不保存账号密码、媒体源 URL或独立本地观看断点。Cookie 会话由系统 WebView 管理，退出登录清除该会话。
