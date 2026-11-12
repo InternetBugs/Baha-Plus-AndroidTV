@@ -198,6 +198,8 @@ class OfficialPortal(
             window.__bahaMediaSuspended=${!foreground};
             window.__bahaDanmakuPreferences={enabled:false,rolling:false,top:false,bottom:false,opacity:1,scale:1};
             window.__bahaPreferredQuality=${preferences.quality};
+            ${script("age-confirmation")}
+            ${script("ad-skip")}
             ${script("native-hls")}
             ${script("native-playback")}
         """.trimIndent())
@@ -311,6 +313,19 @@ class OfficialPortal(
             })();
         """.trimIndent())
     }
+    fun confirmAge(callback: (Boolean) -> Unit) = playerPrompt("confirmAge", callback)
+    fun skipAd(callback: (Boolean) -> Unit) = playerPrompt("skipAd", callback)
+    private fun playerPrompt(action: String, callback: (Boolean) -> Unit) {
+        if (destroyed || !ready || !foreground || purpose != Purpose.PLAY || nativeActive ||
+            !OfficialSite.trusted(webView.url.orEmpty())) {
+            callback(false)
+            return
+        }
+        val expected = document
+        evaluate("window.__bahaPlayerBridge?.$action(${quote(expected)})===true") {
+            callback(expected == document && it == "true")
+        }
+    }
     fun commitNative(callback: (JSONObject?) -> Unit) {
         val expected = document
         evaluate("JSON.stringify(window.__bahaPlayerBridge?.commitNative()||null)") { raw ->
@@ -340,7 +355,11 @@ class OfficialPortal(
         }
     }
     fun failNative() { evaluate("window.__bahaPlayerBridge?.failNative();") }
-    fun reload() { if (!destroyed) webView.reload() }
+    fun reload() {
+        if (destroyed) return
+        if (purpose == Purpose.PLAY) onVisible(true, "play")
+        webView.reload()
+    }
     fun logout(after: () -> Unit) {
         // Only one account is supported. Clear its official browser session.
         CookieManager.getInstance().removeAllCookies {

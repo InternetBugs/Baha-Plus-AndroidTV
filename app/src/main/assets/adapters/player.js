@@ -259,8 +259,8 @@
       #video-container video{width:100%!important;height:100%!important;object-fit:contain!important}
       #video-container .ncc-choosearea{max-width:94%!important}
       #video-container .ncc-choosearea>img{max-width:20vw!important;max-height:28vh!important;object-fit:contain}
-      #video-container .ncc-choosebar{font-size:12px!important}
-      #video-container .ncc-choose-btn button{font-size:14px!important;min-height:30px!important;padding:4px 12px!important}
+      #video-container .ncc-choosebar{font-size:18px!important}
+      #video-container .ncc-choose-btn button{font-size:18px!important;min-height:48px!important;min-width:128px!important;padding:10px 24px!important}
       .baha-native-controls #video-container .vjs-control-bar,
       .baha-native-controls #video-container .vjs-big-play-button{opacity:0!important;pointer-events:none!important}
       .baha-native-controls #video-container video::-webkit-media-controls{display:none!important}
@@ -394,6 +394,8 @@
     const danmaku = c.root?.querySelector('.vjs-danmu');
     const body = {
       type: 'player-state', phase: cacheRecovering || restoringCheckpoint ? 'loading' : c.phase, surfaceReady: !!c.root && c.matches,
+      ageConfirmationAvailable: ageConfirmation?.available() === true,
+      adSkip: adSkip?.status() || null,
       paused: c.media?.paused !== false, ended: c.media?.ended === true,
       muted: c.media?.muted === true, buffering: !c.media || c.media.readyState < 3,
       position, duration, buffered, bufferedRanges, rate: c.media?.playbackRate || 1,
@@ -557,7 +559,15 @@
   const nativePlayback = window.__bahaCreateNativePlayback?.({
     context, isCurrent: () => window.__bahaDocumentNonce === nonce
   });
+  const ageConfirmation = window.__bahaCreateAgeConfirmation?.({
+    context, isCurrent: () => window.__bahaDocumentNonce === nonce && !nativePlayback?.active
+  });
+  const adSkip = window.__bahaCreateAdSkip?.({
+    context, isCurrent: () => window.__bahaDocumentNonce === nonce && !nativePlayback?.active
+  });
   window.__bahaPlayerBridge = { ticket: nonce, command, configure, enableCache, suspend, resume, diagnostics, dispose,
+    confirmAge: ticket => ticket === nonce && ageConfirmation?.confirm() === true,
+    skipAd: ticket => ticket === nonce && adSkip?.skip() === true,
     prepareNative: () => !cachePlayer && !cacheRecovering && !suspendedTimeline &&
       !nativeQuality?.isSwitching() ? nativePlayback?.prepare() : null,
     commitNative: () => {

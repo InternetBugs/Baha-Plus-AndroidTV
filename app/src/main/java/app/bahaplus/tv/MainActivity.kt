@@ -60,6 +60,19 @@ class MainActivity : Activity() {
     private lateinit var browserBar: LinearLayout
     private lateinit var browserTitle: TextView
     private lateinit var browserDone: TextView
+    private lateinit var browserCursor: TextView
+    private lateinit var ageActions: LinearLayout
+    private lateinit var ageHint: TextView
+    private lateinit var ageAgree: TextView
+    private lateinit var ageDecline: TextView
+    private var agePromptVersion = 0
+    private var ageSubmitting = false
+    private lateinit var adSkipActions: LinearLayout
+    private lateinit var adSkipHint: TextView
+    private lateinit var adSkipButton: TextView
+    private var adSkipVersion = 0
+    private var adSkipAvailable = false
+    private var adSkipSubmitting = false
     private lateinit var browser: WebView
     private lateinit var cursor: RemoteCursor
     private lateinit var portal: OfficialPortal
@@ -195,15 +208,68 @@ class MainActivity : Activity() {
             browserBar.addView(browserDone, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(10) })
             browserBar.addView(TvStyle.button(this, tr("刷新", "重新整理")) { portal.reload() },
                 LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(9) })
-            browserBar.addView(TvStyle.button(this, tr("遥控光标", "遙控游標")) {
+            browserCursor = TvStyle.button(this, tr("遥控光标", "遙控游標")) {
                 cursor.active = !cursor.active
                 if (cursor.active) browser.requestFocus()
-            }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(9) })
+            }
+            browserBar.addView(browserCursor, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(9) })
             browserPane.addView(browserBar, LinearLayout.LayoutParams(-1, -2))
             val surface = FrameLayout(this)
             surface.addView(browser, FrameLayout.LayoutParams(-1, -1))
             surface.addView(cursor, FrameLayout.LayoutParams(-1, -1))
             browserPane.addView(surface, LinearLayout.LayoutParams(-1, 0, 1f))
+            ageActions = TvStyle.horizontal(this).apply {
+                visibility = View.GONE
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(20), dp(12), dp(20), dp(12))
+                setBackgroundColor(TvStyle.rail)
+            }
+            ageHint = TvStyle.label(this, tr("请阅读官方分级提示\n左右选择 · 确认键执行", "請閱讀官方分級提示\n左右選擇 · 確認鍵執行"), 16f)
+            ageActions.addView(ageHint, LinearLayout.LayoutParams(0, -2, 1f))
+            ageAgree = TvStyle.button(this, tr("同意并继续", "同意並繼續"), ::confirmAge).apply { textSize = 20f }
+            ageDecline = TvStyle.button(this, tr("不同意，返回详情", "不同意，返回詳情"), ::exitPlayback).apply { textSize = 20f }
+            ageActions.addView(ageAgree, LinearLayout.LayoutParams(dp(208), dp(56)).apply { leftMargin = dp(16) })
+            ageActions.addView(ageDecline, LinearLayout.LayoutParams(dp(240), dp(56)).apply { leftMargin = dp(16) })
+            ageAgree.nextFocusLeftId = ageAgree.id
+            ageAgree.nextFocusRightId = ageDecline.id
+            ageDecline.nextFocusLeftId = ageAgree.id
+            ageDecline.nextFocusRightId = ageDecline.id
+            for (button in listOf(ageAgree, ageDecline)) {
+                button.nextFocusUpId = browserDone.id
+                button.nextFocusDownId = button.id
+                browserActionKeys(button)
+            }
+            browserPane.addView(ageActions, LinearLayout.LayoutParams(-1, -2))
+            adSkipActions = TvStyle.horizontal(this).apply {
+                visibility = View.GONE
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(20), dp(12), dp(20), dp(12))
+                setBackgroundColor(TvStyle.rail)
+            }
+            adSkipHint = TvStyle.label(this, "", 16f).apply { maxLines = 2 }
+            adSkipActions.addView(adSkipHint, LinearLayout.LayoutParams(0, -2, 1f))
+            adSkipButton = TvStyle.button(this, tr("跳过广告", "跳過廣告"), ::skipAd).apply {
+                textSize = 20f
+                nextFocusLeftId = id
+                nextFocusRightId = id
+                nextFocusDownId = id
+                nextFocusUpId = browserDone.id
+            }
+            browserActionKeys(adSkipButton)
+            adSkipActions.addView(adSkipButton, LinearLayout.LayoutParams(dp(240), dp(56)).apply { leftMargin = dp(16) })
+            browserPane.addView(adSkipActions, LinearLayout.LayoutParams(-1, -2))
+            for (index in 0 until browserBar.childCount) {
+                browserBar.getChildAt(index).takeIf { it.isFocusable }?.setOnKeyListener { _, code, event ->
+                    if (code == KeyEvent.KEYCODE_DPAD_DOWN && event.action == KeyEvent.ACTION_DOWN) {
+                        val target = when {
+                            ageActions.visibility == View.VISIBLE -> ageAgree
+                            adSkipActions.visibility == View.VISIBLE && adSkipAvailable -> adSkipButton
+                            else -> null
+                        }
+                        target?.requestFocus() == true
+                    } else false
+                }
+            }
             root.addView(browserPane, FrameLayout.LayoutParams(1, 1))
             portal = OfficialPortal(browser, preferences, ::onOfficialEvent, ::showBrowser, ::onRendererGone)
             portalAvailable = true
@@ -662,6 +728,8 @@ class MainActivity : Activity() {
         if (!::browserPane.isInitialized) return
         browserVisible = visible
         cursor.active = false
+        showAgeConfirmation(false)
+        showAdSkip(false, null)
         browserPane.layoutParams = FrameLayout.LayoutParams(if (visible) -1 else 1, if (visible) -1 else 1)
         browserPane.alpha = if (visible) 1f else .01f
         browserBar.visibility = if (visible) View.VISIBLE else View.GONE
@@ -671,6 +739,7 @@ class MainActivity : Activity() {
         if (visible) {
             closeQrLogin()
             browserPane.bringToFront()
+            browserCursor.visibility = if (portal.purpose == OfficialPortal.Purpose.PLAY) View.GONE else View.VISIBLE
             browserDone.text = if (reason == "play") tr("返回详情", "返回詳情") else tr("完成登录 / 验证", "完成登入 / 驗證")
             browserTitle.text = when (reason) {
                 "play" -> tr("官方验证与广告 · 完成后自动播放", "官方驗證與廣告 · 完成後自動播放")
@@ -683,6 +752,106 @@ class MainActivity : Activity() {
                 render()
                 if (detailsOpen) focusContent() else navigation[tab]?.requestFocus()
             } else native?.showControls()
+        }
+    }
+    private fun browserActionKeys(button: TextView) {
+        var confirmPressed = false
+        button.setOnFocusChangeListener { _, focused -> if (!focused) confirmPressed = false }
+        // Require a fresh press on this control, including when it appears
+        // while OK is held. Dispatch only on release and consume repeats.
+        button.setOnKeyListener { view, code, event ->
+            if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) confirmPressed = true
+                if (event.action == KeyEvent.ACTION_UP) {
+                    val activate = confirmPressed && !event.isCanceled
+                    confirmPressed = false
+                    if (activate) view.performClick()
+                }
+                true
+            } else false
+        }
+    }
+    private fun showAdSkip(advertisement: Boolean, state: JSONObject?) {
+        if (!::adSkipActions.isInitialized) return
+        val show = advertisement && browserVisible && playingVideo.isNotEmpty() && state?.optBoolean("visible") == true
+        if (!show) {
+            if (adSkipActions.visibility == View.GONE) return
+            adSkipVersion++
+            adSkipAvailable = false
+            adSkipSubmitting = false
+            val restoreToolbar = adSkipActions.hasFocus()
+            adSkipActions.visibility = View.GONE
+            if (restoreToolbar && browserVisible) browserDone.requestFocus()
+            return
+        }
+        if (adSkipActions.visibility != View.VISIBLE) {
+            adSkipVersion++
+            adSkipActions.visibility = View.VISIBLE
+        }
+        if (adSkipSubmitting) return
+        val available = state?.optBoolean("available") == true
+        val seconds = state?.optInt("remainingSeconds", -1) ?: -1
+        adSkipHint.text = if (available) tr("官方已允许跳过广告\n按确认键继续播放", "官方已允許跳過廣告\n按確認鍵繼續播放")
+            else if (seconds >= 0) tr("广告 $seconds 秒", "廣告 $seconds 秒")
+            else tr("等待官方广告倒计时", "等待官方廣告倒數")
+        adSkipButton.text = if (available) tr("跳过广告", "跳過廣告") else tr("倒计时中…", "倒數中…")
+        adSkipButton.isEnabled = available
+        if (available && !adSkipAvailable) {
+            cursor.active = false
+            adSkipButton.requestFocus()
+        }
+        adSkipAvailable = available
+    }
+    private fun skipAd() {
+        if (adSkipSubmitting || !adSkipAvailable || adSkipActions.visibility != View.VISIBLE || !browserVisible) return
+        adSkipSubmitting = true
+        adSkipButton.isEnabled = false
+        adSkipHint.text = tr("正在提交官方跳过操作…", "正在提交官方跳過操作…")
+        val version = adSkipVersion
+        portal.skipAd result@ { accepted ->
+            if (version != adSkipVersion || !browserVisible) return@result
+            if (accepted) showAdSkip(false, null)
+            else {
+                adSkipSubmitting = false
+                adSkipAvailable = false
+                adSkipHint.text = tr("官方按钮暂不可用\n请稍候或刷新后重试", "官方按鈕暫時無法使用\n請稍候或重新整理後重試")
+                browserDone.requestFocus()
+            }
+        }
+    }
+    private fun showAgeConfirmation(available: Boolean) {
+        if (!::ageActions.isInitialized) return
+        val show = available && browserVisible && playingVideo.isNotEmpty()
+        if (show == (ageActions.visibility == View.VISIBLE)) return
+        agePromptVersion++
+        ageSubmitting = false
+        ageAgree.isEnabled = true
+        if (show) {
+            cursor.active = false
+            ageHint.text = tr("请阅读官方分级提示\n左右选择 · 确认键执行", "請閱讀官方分級提示\n左右選擇 · 確認鍵執行")
+            ageActions.visibility = View.VISIBLE
+            ageAgree.requestFocus()
+        } else {
+            val restoreToolbar = ageActions.hasFocus()
+            ageActions.visibility = View.GONE
+            if (restoreToolbar && browserVisible) browserDone.requestFocus()
+        }
+    }
+    private fun confirmAge() {
+        if (ageSubmitting || ageActions.visibility != View.VISIBLE || !browserVisible) return
+        ageSubmitting = true
+        ageAgree.isEnabled = false
+        ageHint.text = tr("正在提交官方年龄确认…", "正在提交官方年齡確認…")
+        val version = agePromptVersion
+        portal.confirmAge result@ { accepted ->
+            if (version != agePromptVersion || !browserVisible) return@result
+            if (accepted) showAgeConfirmation(false)
+            else {
+                ageSubmitting = false
+                ageAgree.isEnabled = true
+                ageHint.text = tr("官方按钮暂不可用\n请刷新后重试", "官方按鈕暫時無法使用\n請重新整理後重試")
+                ageAgree.requestFocus()
+            }
         }
     }
     private fun login() {
@@ -809,6 +978,8 @@ class MainActivity : Activity() {
                 }
                 "player-state" -> {
                     if (body.optString("videoId") != playingVideo) return
+                    showAgeConfirmation(body.optString("phase") == "age" && body.optBoolean("ageConfirmationAvailable"))
+                    showAdSkip(body.optString("phase") == "advertisement", body.optJSONObject("adSkip"))
                     when (body.optString("phase")) {
                         "content" -> if (body.optDouble("duration", 0.0) > 0 && native == null) portal.prepareNative()
                         "error" -> playbackError("official-playback-error")

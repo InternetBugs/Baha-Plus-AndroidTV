@@ -120,3 +120,19 @@ python tools/emulator-inspect.py stats sample
 ```
 
 生成的 emulator stdout 因早期运行目录锁错误积累过重复日志；模拟器停止后已保留注明范围的末尾摘要，将约 298 MB 的生成日志缩减为约 5.6 KB。它不是完整运行日志。
+
+## 年龄确认遥控回归（2026 年 11 月 13 日）
+
+本轮使用独立 AVD `BahaPlusTV_Age_API30`，Android TV API 30／32 位 x86、1920×1080、默认低资源模式及官方访客会话。所有应用操作使用 ADB 方向键、确认键和返回键，年龄确认使用新增的原生电视大按钮。
+
+| 场景 | 实际结果与本机证据 |
+| --- | --- |
+| 初次进入年龄页 | 官方分级标志及警告保留，底部“同意并继续”自动获得焦点；`artifacts/emulator/age-isolated-initial.png` |
+| 左右切换及焦点保持 | 右键聚焦“不同意，返回详情”，连续采集期间保持该选项；右、左往返后回到“同意并继续”；`age-isolated-right.png`、`age-isolated-right-stable.png`、`age-isolated-left.png` |
+| 拒绝及重新进入 | 确认“不同意，返回详情”回到详情“开始播放”；重新进入后再次聚焦年龄确认；`age-isolated-declined.png`、`age-isolated-reopened.png` |
+| 顶栏刷新 | 从大按钮按上、右到达刷新；刷新后年龄页重新出现并聚焦同意按钮；`age-isolated-refresh-focused.png`、`age-isolated-refreshed.png` |
+| 确认 | 一次确认点击当前文档的官方同意按钮，底部操作条收起，官方广告实际播放；`age-isolated-after-confirm.png` |
+
+25 项 JavaScript 适配器测试、5 项 JVM 测试、Android 编译、Lint 与 APK 生成通过；Lint 错误为 0。新增适配器测试覆盖显式确认、重复提交、过期文档、后台、非年龄阶段、隐藏／禁用／变化的按钮与错误来源。当前应用进程的保留日志中 Java fatal exception、native fatal signal 和 ANR 计数均为 0，见 `artifacts/emulator/age-isolated-stats.json`。
+
+本轮记录不扩大此前的目标 ARM 电视、真实账号同步或整集播放验收范围。
