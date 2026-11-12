@@ -114,6 +114,7 @@ class OfficialPortal(
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 ready = false
+                handler.removeCallbacks(poll)
                 document = UUID.randomUUID().toString()
                 requests.clear()
                 completed.clear()
@@ -162,28 +163,35 @@ class OfficialPortal(
                 return true
             }
         }
-        handler.post(poll)
         home()
+    }
+
+    private fun schedulePoll() {
+        handler.removeCallbacks(poll)
+        if (!destroyed && !hasMessageListener && foreground && ready &&
+            !nativeActive && requests.isNotEmpty()) {
+            handler.postDelayed(poll, 750)
+        }
     }
 
     private val poll = object : Runnable {
         override fun run() {
             if (destroyed) return
-            if (!hasMessageListener && foreground && ready && OfficialSite.trusted(webView.url.orEmpty())) {
+            if (!hasMessageListener && foreground && ready && !nativeActive &&
+                requests.isNotEmpty() && OfficialSite.trusted(webView.url.orEmpty())) {
                 val expected = document
                 evaluate("JSON.stringify({document:window.__bahaDocumentNonce,origin:location.origin,messages:(window.__bahaTVMessages||[]).splice(0,64)})") { raw ->
-                    if (expected != document) return@evaluate
-                    val result = decodeString(raw) ?: return@evaluate
-                    runCatching {
+                    val result = decodeString(raw)
+                    if (expected == document && result != null) runCatching {
                         val data = JSONObject(result)
                         if (data.optString("document") == document && data.optString("origin") == OfficialSite.ORIGIN) {
                             val messages = data.getJSONArray("messages")
                             for (index in 0 until messages.length()) receive(messages.getJSONObject(index).toString())
                         }
                     }
+                    schedulePoll()
                 }
-            }
-            handler.postDelayed(this, 750)
+            } else schedulePoll()
         }
     }
 
@@ -332,6 +340,7 @@ class OfficialPortal(
             val result = if (expected == document) decodeString(raw) else null
             val body = result?.let { runCatching { JSONObject(it) }.getOrNull() }
             nativeActive = body != null
+            schedulePoll()
             callback(body)
         }
     }
@@ -375,6 +384,7 @@ class OfficialPortal(
         if (active) webView.onResume() else webView.onPause()
         evaluate("window.__bahaMediaSuspended=${!active};window.__bahaPlayerBridge?.${if (active) "resume" else "suspend"}();")
         if (purpose == Purpose.QR_LOGIN) evaluate("window.__bahaQrLogin?.${if (active) "resume" else "pause"}();")
+        schedulePoll()
     }
     fun destroy() {
         if (destroyed) {
@@ -411,6 +421,7 @@ class OfficialPortal(
             })();true;
         """.trimIndent()
         evaluate(wrapped)
+        schedulePoll()
         if (!sticky) handler.postDelayed({
             if (!destroyed && nonce == document && requests.containsKey(operation) && !completed.contains(operation)) {
                 requests.remove(operation)

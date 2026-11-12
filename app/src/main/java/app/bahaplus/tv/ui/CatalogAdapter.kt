@@ -30,6 +30,16 @@ class CatalogAdapter(
     private val onFocus: (Int, CatalogRow.Card) -> Unit,
     private val onClick: (CatalogRow.Card) -> Unit
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+    private val columns = IntArray(rows.size).also { values ->
+        var column = 0
+        rows.forEachIndexed { index, row ->
+            if (row is CatalogRow.Heading) column = 0
+            else {
+                values[index] = column
+                column = (column + 1) % 4
+            }
+        }
+    }
     class HeadingHolder(val label: android.widget.TextView) : RecyclerView.ViewHolder(label)
     class CardHolder(val root: LinearLayout, val image: ImageView, val title: android.widget.TextView,
                      val subtitle: android.widget.TextView, val progress: ProgressBar) : RecyclerView.ViewHolder(root)
@@ -105,13 +115,7 @@ class CatalogAdapter(
             posters.load(holder.image, row.anime.cover)
         }
     }
-    private fun column(position: Int): Int {
-        var count = 0
-        for (index in 0 until position) {
-            if (rows[index] is CatalogRow.Heading) count = 0 else count++
-        }
-        return count % 4
-    }
+    private fun column(position: Int) = columns[position]
     override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
         if (holder is CardHolder) {
             posters.cancel(holder.image)
@@ -119,6 +123,10 @@ class CatalogAdapter(
         }
     }
     fun spans() = object : GridLayoutManager.SpanSizeLookup() {
+        init {
+            isSpanIndexCacheEnabled = true
+            isSpanGroupIndexCacheEnabled = true
+        }
         override fun getSpanSize(position: Int) = if (rows[position] is CatalogRow.Heading) 4 else 1
     }
 }

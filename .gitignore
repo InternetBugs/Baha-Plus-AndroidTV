@@ -11,3 +11,4 @@ captures/
 artifacts/*.apk
 artifacts/*.sha256
 artifacts/emulator/
+artifacts/performance/

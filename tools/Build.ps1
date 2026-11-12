@@ -25,9 +25,10 @@ if ($Offline) { $arguments += '--offline' }
 if ($LASTEXITCODE -ne 0) { throw 'Android checks/build failed.' }
 $artifactDirectory = Join-Path $projectRoot 'artifacts'
 New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
-$artifact = Join-Path $artifactDirectory 'BahaPlusTV-0.1.0-debug.apk'
+$artifactName = 'BahaPlusTV-0.2.0-debug.apk'
+$artifact = Join-Path $artifactDirectory $artifactName
 Copy-Item -LiteralPath (Join-Path $projectRoot 'app\build\outputs\apk\debug\app-debug.apk') -Destination $artifact -Force
 $checksum = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
-"$checksum  BahaPlusTV-0.1.0-debug.apk" | Set-Content -LiteralPath "$artifact.sha256" -Encoding ascii
+"$checksum  $artifactName" | Set-Content -LiteralPath "$artifact.sha256" -Encoding ascii
 Write-Output "APK: $artifact"
 Write-Output "SHA-256: $checksum"

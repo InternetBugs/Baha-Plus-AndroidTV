@@ -64,7 +64,9 @@ class NativePlayback(
     private val timeline = TvStyle.label(context, "", 15f, TvStyle.muted)
     private val progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply {
         max = 1000
-        progressTintList = android.content.res.ColorStateList.valueOf(TvStyle.focus)
+        progressBackgroundTintList = ColorStateList.valueOf(TvStyle.surface)
+        secondaryProgressTintList = ColorStateList.valueOf(TvStyle.muted)
+        progressTintList = ColorStateList.valueOf(TvStyle.focus)
     }
     private lateinit var playButton: ImageButton
     private lateinit var qualityButton: TextView
@@ -84,6 +86,8 @@ class NativePlayback(
     private var errorSent = false
     private var clockPending = false
     private var lastClockAck = SystemClock.elapsedRealtime()
+    private var timelineSecond = -1L
+    private var timelineDurationSecond = -1L
     private var chooser: AlertDialog? = null
     private val hide = Runnable { if (player.isPlaying && !dialogOpen) hideControls() }
 
@@ -104,10 +108,7 @@ class NativePlayback(
         override fun run() {
             if (released) return
             if (committed && foreground) {
-                val duration = player.duration.coerceAtLeast(0)
-                val position = player.currentPosition.coerceAtLeast(0)
-                timeline.text = context.getString(R.string.playback_timeline, time(position), time(duration))
-                progress.progress = if (duration > 0) (position * 1000 / duration).toInt().coerceIn(0, 1000) else 0
+                updateTimeline()
                 if (!clockPending) clock()
                 if (SystemClock.elapsedRealtime() - lastClockAck > 8000) fail("official-session-unresponsive")
             }
@@ -165,6 +166,9 @@ class NativePlayback(
         view.addView(controls, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         view.addView(status, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
         player.addListener(object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                if (!released && foreground) updateTimeline()
+            }
             override fun onPlaybackStateChanged(state: Int) {
                 if (released) return
                 if (state == Player.STATE_READY && !committed && !committing) commit()
@@ -238,6 +242,7 @@ class NativePlayback(
         player.setMediaItem(MediaItem.fromUri(url), position.coerceAtLeast(0))
         player.playWhenReady = play
         player.prepare()
+        updateTimeline()
     }
     private fun toggle() {
         if (released || !committed) return
@@ -253,8 +258,23 @@ class NativePlayback(
         val duration = player.duration.takeIf { it > 0 } ?: return
         player.seekTo((player.currentPosition + delta).coerceIn(0, duration))
         endedSent = false
-        timeline.text = context.getString(R.string.playback_timeline, time(player.currentPosition), time(duration))
+        updateTimeline()
         clock()
+    }
+    private fun updateTimeline() {
+        // Official clock updates continue independently while the controls are hidden.
+        if (controls.visibility != View.VISIBLE) return
+        val duration = player.duration.coerceAtLeast(0)
+        val position = player.currentPosition.coerceAtLeast(0)
+        val bufferedPosition = player.bufferedPosition.coerceAtLeast(position)
+        fun scaled(value: Long) = if (duration > 0) (value.coerceIn(0, duration) * progress.max / duration).toInt() else 0
+        if (position / 1000 != timelineSecond || duration / 1000 != timelineDurationSecond) {
+            timelineSecond = position / 1000
+            timelineDurationSecond = duration / 1000
+            timeline.text = context.getString(R.string.playback_timeline, time(position), time(duration))
+        }
+        progress.progress = scaled(position)
+        progress.secondaryProgress = scaled(bufferedPosition)
     }
     fun showControls() {
         if (released) return
@@ -262,6 +282,7 @@ class NativePlayback(
             controls.visibility = View.VISIBLE
             playButton.requestFocus()
         }
+        updateTimeline()
         scheduleHide()
     }
     private fun hideControls() {

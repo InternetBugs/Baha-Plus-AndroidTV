@@ -29,7 +29,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.webkit.WebViewCompat
 import app.bahaplus.tv.core.*
@@ -41,6 +40,7 @@ import app.bahaplus.tv.ui.CatalogRow
 import app.bahaplus.tv.ui.RemoteCursor
 import app.bahaplus.tv.ui.QrLoginView
 import app.bahaplus.tv.ui.TvStyle
+import app.bahaplus.tv.ui.TvGridLayoutManager
 import org.json.JSONObject
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -299,6 +299,8 @@ class MainActivity : Activity() {
         playerLayer.visibility = View.GONE
         saveGrid()
         settingsScroll?.let { settingsScrollY = it.scrollY }
+        // Recycle old cards now so their pending poster work is cancelled.
+        grid?.adapter = null
         content.removeAllViews()
         grid = null
         episodeGrid = null
@@ -382,7 +384,9 @@ class MainActivity : Activity() {
     }
     private fun renderGrid(rows: List<CatalogRow>) {
         val list = RecyclerView(this)
-        val manager = GridLayoutManager(this, 4).apply { initialPrefetchItemCount = if (preferences.lowResources) 4 else 8 }
+        val manager = TvGridLayoutManager(this, 4, preferences.lowResources).apply {
+            initialPrefetchItemCount = if (preferences.lowResources) 4 else 8
+        }
         val adapter = CatalogAdapter(this, rows, posters, navigation[tab]!!.id,
             onLeft = { navigation[tab]?.requestFocus() },
             onFocus = { position, card ->
@@ -579,7 +583,7 @@ class MainActivity : Activity() {
             }
         } else {
             val episodes = RecyclerView(this).apply {
-                layoutManager = GridLayoutManager(this@MainActivity, 6)
+                layoutManager = TvGridLayoutManager(this@MainActivity, 6, preferences.lowResources)
                 itemAnimator = null
                 adapter = EpisodeAdapter(detail.episodes)
                 setItemViewCacheSize(6)
@@ -718,14 +722,18 @@ class MainActivity : Activity() {
         playingDetail = null
         playbackErrorVisible = false
         detailsOpen = true
+        val wasBrowserVisible = browserVisible
         showBrowser(false, "")
-        render()
-        focusContent()
+        if (!wasBrowserVisible) {
+            render()
+            focusContent()
+        }
         if (portalAvailable) portal.stopPlayback { portal.home() }
     }
 
     private fun showBrowser(visible: Boolean, reason: String) {
         if (!::browserPane.isInitialized) return
+        val wasVisible = browserVisible
         browserVisible = visible
         cursor.active = false
         showAgeConfirmation(false)
@@ -748,7 +756,7 @@ class MainActivity : Activity() {
             }
             browserDone.requestFocus()
         } else {
-            if (native == null && playingVideo.isEmpty()) {
+            if (wasVisible && native == null && playingVideo.isEmpty()) {
                 render()
                 if (detailsOpen) focusContent() else navigation[tab]?.requestFocus()
             } else native?.showControls()

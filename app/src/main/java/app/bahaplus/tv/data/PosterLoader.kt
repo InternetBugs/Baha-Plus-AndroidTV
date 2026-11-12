@@ -8,6 +8,7 @@ import android.os.Looper
 import android.util.LruCache
 import android.widget.ImageView
 import app.bahaplus.tv.core.OfficialSite
+import app.bahaplus.tv.core.posterSampleSize
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -59,9 +60,7 @@ class PosterLoader(context: Context, lowResources: Boolean) {
                 if (Thread.interrupted()) return@submit
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-                require(bounds.outWidth in 1..16384 && bounds.outHeight in 1..16384)
-                var sample = 1
-                while (bounds.outWidth / sample > target * 2 || bounds.outHeight / sample > target * 2) sample *= 2
+                val sample = posterSampleSize(bounds.outWidth, bounds.outHeight, target)
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
                     inSampleSize = sample
                     inPreferredConfig = Bitmap.Config.RGB_565
