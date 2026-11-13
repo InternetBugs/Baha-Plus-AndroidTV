@@ -26,6 +26,7 @@ class NativeApiClientTest {
         "/anime/v1/video_src.php" -> """{"data":{"deviceid":"device-two","srcUseCases":[
           {"deviceType":1,"src":{"playlist":"https://bahamut.akamaized.net/test/playlist.m3u8"}}]}}"""
         "/ajax/elapse.php" -> """{"state":"ok","device":"device-three"}"""
+        "/anime/v1/danmu.php" -> """{"data":{"danmu":[{"sn":1,"time":100,"text":"彈幕","position":0,"size":1}]}}"""
         else -> "{}"
     }
 
@@ -81,6 +82,48 @@ class NativeApiClientTest {
         val before = count
         assertThrows(ApiFailure::class.java) { session.progress(30.0, 1440.0) }
         assertEquals(before, count)
+        session.close()
+    }
+
+    @Test fun danmakuUsesTheAuthorizedEpisodeSessionAndStaysBehindTheAdGate() {
+        val requests = mutableListOf<Response>()
+        val uris = mutableListOf<URI>()
+        val session = NativeApiClient(mapOf("api.gamer.com.tw" to "account=private"),
+            openConnection = { uri ->
+                uris += uri
+                Response(uri, body(uri.path, true)).also { requests += it }
+            }) { _, _ -> }
+        assertThrows(IllegalStateException::class.java) { session.danmaku() }
+        session.prepare("10")
+        assertThrows(IllegalStateException::class.java) { session.danmaku() }
+        session.consent()
+        assertThrows(IllegalStateException::class.java) { session.danmaku() }
+        session.startAd()
+        session.endAd(30.0)
+        assertEquals(10_000L, session.danmaku().single().timeMs)
+        val uri = uris.last()
+        assertEquals("api.gamer.com.tw", uri.host)
+        assertEquals("/anime/v1/danmu.php", uri.path)
+        assertEquals("videoSn=10&geo=TW%2CHK", uri.rawQuery)
+        assertEquals("account=private", requests.last().getRequestProperty("Cookie"))
+        assertFalse(requests.last().instanceFollowRedirects)
+        session.close()
+        assertThrows(ApiFailure::class.java) { session.danmaku() }
+    }
+
+    @Test fun failedDanmakuReadDoesNotRetireThePlaybackSession() {
+        var failRead = true
+        val session = NativeApiClient(openConnection = { uri ->
+            Response(uri, if (uri.path.endsWith("danmu.php") && failRead) "{}" else body(uri.path, false))
+        }) { _, _ -> }
+        session.prepare("10")
+        session.consent()
+        session.source()
+        session.started()
+        assertThrows(ApiFailure::class.java) { session.danmaku() }
+        assertEquals("ok", session.progress(30.0, 1440.0))
+        failRead = false
+        assertEquals(1, session.danmaku().size)
         session.close()
     }
 }

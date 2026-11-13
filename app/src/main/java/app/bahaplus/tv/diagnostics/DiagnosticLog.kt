@@ -113,7 +113,8 @@ class DiagnosticLog(private val directory: File, private val partBytes: Int = 25
             "favorite-unavailable", "favorite-rejected", "parent-verification-required", "short-ad-needs-fallback",
             "progress-denied", "ok", "guest", "ad-missing", "video-mismatch", "policy-format", "policy-rejected",
             "detail-cancelled", "detail-network", "detail-http", "detail-invalid",
-            "detail-too-large", "detail-rejected", "detail-video-unavailable"
+            "detail-too-large", "detail-rejected", "detail-video-unavailable",
+            "danmaku-format", "danmaku-load"
         )
         private val OFFICIAL_EVENTS = setOf(
             "qr-login-ready", "qr-login-retrying", "qr-login-expired", "qr-login-error", "qr-login-complete",
@@ -125,7 +126,8 @@ class DiagnosticLog(private val directory: File, private val partBytes: Int = 25
             "account.login", "account.logout", "player.request", "player.active", "player.ended",
             "player.exit", "player.error", "player.state", "player.playing", "player.seek", "player.quality",
             "web.started", "web.finished", "web.error", "web.http-error", "web.renderer-gone", "web.script-compat",
-            "api.error", "player.http", "player.progress", "detail.request", "detail.completed", "detail.failed"
+            "api.error", "player.http", "player.progress", "detail.request", "detail.completed", "detail.failed",
+            "player.danmaku", "player.danmaku-failed"
         ) + OFFICIAL_EVENTS.map { "official.$it" }
     }
 }

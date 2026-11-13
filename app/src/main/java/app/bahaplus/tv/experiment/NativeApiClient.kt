@@ -1,5 +1,7 @@
 package app.bahaplus.tv.experiment
 
+import app.bahaplus.tv.core.Danmaku
+import app.bahaplus.tv.data.NativeDanmakuParser
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URI
@@ -90,6 +92,13 @@ class NativeApiClient(
     fun started() {
         jsonOrText("device-lock", "$WEB/ajax/checklock.php", mapOf("sn" to video, "device" to device))
         jsonOrText("video-start", "$WEB/ajax/checklock.php", mapOf("sn" to video))
+    }
+
+    /** Read only after the normal consent and advertisement gates have passed. */
+    fun danmaku(): List<Danmaku> {
+        check(::gate.isInitialized && gate.canRequestSource) { "danmaku-gated" }
+        return NativeDanmakuParser.parse(json("danmaku", "$API/anime/v1/danmu.php",
+            mapOf("videoSn" to video, "geo" to "TW,HK")))
     }
 
     fun state(watchSeconds: Double) {

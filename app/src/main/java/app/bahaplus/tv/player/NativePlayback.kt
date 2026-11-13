@@ -95,6 +95,8 @@ class NativePlayback(
     private var adFinishing = false
     private var resumeAd = false
     private var progressPending = false
+    private var danmakuLoading = false
+    private var danmakuLoaded = false
     private var statePending = false
     private var nextProgress = 60.0
     private var consentDialog: AlertDialog? = null
@@ -115,7 +117,9 @@ class NativePlayback(
     private var timelineSecond = -1L
     private var timelineDurationSecond = -1L
     private var chooser: AlertDialog? = null
-    private val hide = Runnable { if (player.isPlaying && !dialogOpen) hideControls() }
+    private val hide = Runnable {
+        if (player.isPlaying && !dialogOpen && !danmakuControls.expanded) hideControls()
+    }
 
     private val factory = DefaultHttpDataSource.Factory()
         .setUserAgent(NativeApiClient.AGENT)
@@ -129,6 +133,14 @@ class NativePlayback(
             .setPrioritizeTimeOverSizeThresholds(false).setBackBuffer(0, false).build())
         .setMediaSourceFactory(HlsMediaSource.Factory(factory))
         .build()
+    private val danmaku = DanmakuView(context, player, preferences.lowResources)
+    private val danmakuControls = DanmakuControls(context, preferences,
+        onChange = { settings ->
+            danmaku.configure(settings)
+            if (settings.enabled && !danmakuLoaded && !danmakuLoading) loadDanmaku()
+        },
+        onRetry = ::loadDanmaku,
+        onInteraction = ::scheduleHide)
 
     private val tick = object : Runnable {
         override fun run() {
@@ -158,6 +170,8 @@ class NativePlayback(
     init {
         androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_OFF)
         view.addView(video, FrameLayout.LayoutParams(-1, -1))
+        view.addView(danmaku, FrameLayout.LayoutParams(-1, -1))
+        danmaku.configure(preferences.danmaku)
         video.player = player
         player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
         player.setHandleAudioBecomingNoisy(true)
@@ -196,6 +210,9 @@ class NativePlayback(
             topMargin = TvStyle.dp(context, 10)
             bottomMargin = TvStyle.dp(context, 13)
         })
+        controls.addView(danmakuControls, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = TvStyle.dp(context, 6)
+        })
         qualityButton = action(optionsRow, qualityLabel()) { chooseQuality() }
         speedButton = action(optionsRow, "${preferences.speed}×") { chooseSpeed() }
         action(optionsRow, tr("选集", "選集")) { chooseEpisode() }
@@ -210,7 +227,10 @@ class NativePlayback(
         view.addView(adPanel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
-                if (!released && foreground) updateTimeline()
+                if (!released && foreground) {
+                    updateTimeline()
+                    danmaku.refresh()
+                }
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (released) return
@@ -254,6 +274,7 @@ class NativePlayback(
             override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
                 watch.discontinuity()
                 adWatch.discontinuity()
+                danmaku.refresh(discontinuity = true)
             }
             override fun onPlayerError(error: PlaybackException) {
                 fail("media-${error.errorCode}")
@@ -331,11 +352,37 @@ class NativePlayback(
         async({ session.started() }) {
             committed = true
             phase = "content"
+            danmaku.activate()
             status.visibility = View.GONE
             onActive()
             player.playWhenReady = foreground
             showControls()
             reportProgress()
+            if (preferences.danmaku.enabled) loadDanmaku()
+        }
+    }
+
+    /** Same serialized official session, but an optional read cannot fail playback. */
+    private fun loadDanmaku() {
+        if (released || errorSent || !committed || danmakuLoading) return
+        danmakuLoading = true
+        danmakuControls.loading()
+        worker.execute {
+            val result = runCatching { session.danmaku() }
+            handler.post {
+                if (released || errorSent) return@post
+                danmakuLoading = false
+                result.fold(onSuccess = { items ->
+                    danmakuLoaded = true
+                    danmaku.setItems(items)
+                    danmakuControls.loaded(items.size)
+                    Diagnostics.record("player.danmaku", "count" to items.size)
+                }, onFailure = { error ->
+                    danmakuControls.failed()
+                    Diagnostics.record("player.danmaku-failed", "code" to
+                        if (error is ApiFailure && error.stage == "danmaku-format") "danmaku-format" else "danmaku-load")
+                })
+            }
         }
     }
 
@@ -426,16 +473,22 @@ class NativePlayback(
         scheduleHide()
     }
     private fun hideControls() {
+        danmakuControls.collapse()
         controls.visibility = View.GONE
         view.isFocusable = true
         view.requestFocus()
     }
     private fun scheduleHide() {
         handler.removeCallbacks(hide)
-        handler.postDelayed(hide, 4500)
+        if (!danmakuControls.expanded) handler.postDelayed(hide, 4500)
     }
     fun handleBack(): Boolean {
         if (released || !committed) return false
+        if (danmakuControls.expanded) {
+            danmakuControls.collapse()
+            scheduleHide()
+            return true
+        }
         if (controls.visibility == View.VISIBLE) hideControls() else onExit()
         return true
     }
@@ -522,6 +575,7 @@ class NativePlayback(
         if (released || errorSent) return
         errorSent = true
         phase = "error"
+        danmaku.setForeground(false)
         player.pause()
         session.close()
         onError(code)
@@ -531,6 +585,7 @@ class NativePlayback(
         if (phase == "advertisement") adWatch.sample(player.currentPosition.coerceAtLeast(0) / 1000.0,
             foreground && player.isPlaying, false, SystemClock.elapsedRealtime())
         foreground = false
+        danmaku.setForeground(false)
         sampleWatch(player.isPlaying)
         player.pause()
         watch.discontinuity()
@@ -540,6 +595,7 @@ class NativePlayback(
     }
     fun resumeLifecycle() {
         foreground = true
+        danmaku.setForeground(true)
         if (phase == "consent") showConsent()
         if (committed) showControls()
         else if (phase == "advertisement") {
@@ -555,6 +611,7 @@ class NativePlayback(
         sampleWatch(player.isPlaying)
         player.pause()
         released = true
+        danmaku.release()
         if (!shouldReport) session.close()
         handler.removeCallbacksAndMessages(null)
         chooser?.dismiss()
