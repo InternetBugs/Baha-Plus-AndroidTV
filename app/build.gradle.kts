@@ -32,6 +32,12 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
+        create("nativeApi") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".nativeapi"
+            versionNameSuffix = "-native-api"
+            matchingFallbacks += "debug"
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true

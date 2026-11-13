@@ -11,7 +11,7 @@ import java.io.File
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 
-/** Source-to-source syntax translation. All official player logic is retained.
+/** Source-to-source syntax translation for the on-demand official login page.
  * A failed fetch/compile returns null so WebView uses its normal loader and the
  * existing parser-error UI remains available. Modern engines never call this.
  */

@@ -94,7 +94,8 @@ class DiagnosticLog(private val directory: File, private val partBytes: Int = 25
         "screen" -> (value as? String)?.takeIf { it in setOf("home", "search", "favorites", "history", "settings") }
         "purpose" -> (value as? String)?.takeIf { it in setOf("HOME", "LOGIN", "QR_LOGIN", "PLAY") }
         "phase" -> (value as? String)?.takeIf { it in setOf("content", "age", "advertisement", "error", "loading", "idle",
-            "direct", "enabled", "compiled", "cached", "failed") }
+            "direct", "enabled", "compiled", "cached", "failed", "page", "device", "metadata", "policy",
+            "ad-config", "ad-start", "ad-end", "source", "device-lock", "video-start", "playback-state", "progress") }
         "code" -> (value as? String)?.takeIf {
             it in ERROR_CODES || Regex("media-[0-9]{4,6}").matches(it)
         }
@@ -106,26 +107,25 @@ class DiagnosticLog(private val directory: File, private val partBytes: Int = 25
 
     companion object {
         private val ERROR_CODES = setOf(
-            "webview-unavailable", "webview-renderer-gone", "native-source-unavailable", "official-data-invalid",
-            "official-playback-error", "official-document-changed", "official-session-unresponsive",
-            "official-handoff-rejected", "official-timeline-invalid", "official-session-denied",
-            "native-initialize-timeout", "search-error", "detail-error", "favorite-error", "operation-error",
-            "navigation-error", "data-error", "webview-script-incompatible"
+            "webview-unavailable", "webview-renderer-gone", "operation-error", "navigation-error",
+            "native-data-invalid", "native-protocol", "session-stale", "account-stale", "account-format",
+            "network", "official-rejected", "response-too-large", "login-required", "redirect-rejected", "verification-required",
+            "favorite-unavailable", "favorite-rejected", "parent-verification-required", "short-ad-needs-fallback",
+            "progress-denied", "ok", "guest", "ad-missing", "video-mismatch", "policy-format", "policy-rejected",
+            "detail-cancelled", "detail-network", "detail-http", "detail-invalid",
+            "detail-too-large", "detail-rejected", "detail-video-unavailable"
         )
         private val OFFICIAL_EVENTS = setOf(
             "qr-login-ready", "qr-login-retrying", "qr-login-expired", "qr-login-error", "qr-login-complete",
-            "catalog", "search", "detail", "account-authenticated", "account-synced", "account-guest",
-            "favorite-complete", "player-detail", "native-source", "verification-required", "account-error",
-            "authorization-lost", "search-error", "detail-error", "favorite-error", "operation-error",
-            "navigation-error", "data-error"
+            "login-complete", "login-finished", "verification-required", "operation-error", "navigation-error"
         )
         private val EVENTS = setOf(
             "capture.started", "capture.stopped", "app.created", "app.resumed", "app.paused", "app.destroyed",
             "app.crash", "app.state", "app.memory", "ui.tab", "ui.search", "ui.detail", "ui.refresh",
-            "account.login", "account.logout", "player.request", "player.source", "player.active", "player.ended",
+            "account.login", "account.logout", "player.request", "player.active", "player.ended",
             "player.exit", "player.error", "player.state", "player.playing", "player.seek", "player.quality",
             "web.started", "web.finished", "web.error", "web.http-error", "web.renderer-gone", "web.script-compat",
-            "official.phase", "official.invalid"
+            "api.error", "player.http", "player.progress", "detail.request", "detail.completed", "detail.failed"
         ) + OFFICIAL_EVENTS.map { "official.$it" }
     }
 }

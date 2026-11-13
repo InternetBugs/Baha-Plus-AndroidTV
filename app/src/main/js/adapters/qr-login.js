@@ -100,7 +100,7 @@
           if (body.error.status !== 'NOT_YET') { finish('qr-login-error'); return; }
         } else {
           // Cookie installation is handled by the official credentialed response.
-          // The native host reloads and verifies the official account identity.
+          // The native host verifies the official account identity over HTTP.
           if (body.data == null) { finish('qr-login-error'); return; }
           finish('qr-login-complete');
           return;

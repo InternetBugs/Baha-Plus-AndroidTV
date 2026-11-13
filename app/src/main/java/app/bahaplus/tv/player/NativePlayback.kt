@@ -27,20 +27,21 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.ui.PlayerView
 import app.bahaplus.tv.R
 import app.bahaplus.tv.core.AnimeDetail
-import app.bahaplus.tv.core.NativeSource
 import app.bahaplus.tv.core.Preferences
-import app.bahaplus.tv.data.OfficialPortal
 import app.bahaplus.tv.diagnostics.Diagnostics
+import app.bahaplus.tv.experiment.ApiFailure
+import app.bahaplus.tv.experiment.NativeApiClient
+import app.bahaplus.tv.experiment.WatchClock
 import app.bahaplus.tv.ui.TvStyle
-import org.json.JSONObject
 import java.util.Locale
+import java.util.concurrent.Executors
+import kotlin.math.ceil
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class NativePlayback(
     private val context: Context,
-    private val portal: OfficialPortal,
     private val preferences: Preferences,
-    private val source: NativeSource,
+    private val session: NativeApiClient,
     private val detail: AnimeDetail,
     val videoId: String,
     private val onActive: () -> Unit,
@@ -77,23 +78,47 @@ class NativePlayback(
         setPadding(20, 20, 20, 20)
         setBackgroundColor(0xb3101a24.toInt())
     }
-    private var currentQuality = preferences.quality.takeIf { source.variants.containsKey(it) } ?: 0
+    private var currentQuality = preferences.quality
     private var released = false
-    private var committing = false
     private var committed = false
     private var dialogOpen = false
     private var foreground = true
     private var endedSent = false
     private var errorSent = false
-    private var clockPending = false
-    private var lastClockAck = SystemClock.elapsedRealtime()
+    private val worker = Executors.newSingleThreadExecutor()
+    private var phase = "preparing"
+    private var preparation: NativeApiClient.Preparation? = null
+    private val watch = WatchClock()
+    private val adWatch = WatchClock()
+    private var adStartRequested = false
+    private var adStartAcknowledged = false
+    private var adFinishing = false
+    private var resumeAd = false
+    private var progressPending = false
+    private var statePending = false
+    private var nextProgress = 60.0
+    private var consentDialog: AlertDialog? = null
+    private val adPanel = TvStyle.horizontal(context).apply {
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(20, 12, 20, 12)
+        setBackgroundColor(TvStyle.rail)
+        visibility = View.GONE
+    }
+    private val adLabel = TvStyle.label(context, "", 18f)
+    private val adSkip = TvStyle.button(context, tr("广告", "廣告"), ::finishAd).apply { isEnabled = false }
+    private val adToggle = TvStyle.button(context, tr("暂停 / 播放", "暫停 / 播放")) {
+        if (phase == "advertisement" && !adFinishing) {
+            if (player.playWhenReady) player.pause() else player.play()
+        }
+    }
+    private val adExit = TvStyle.button(context, tr("返回详情", "返回詳情"), onExit)
     private var timelineSecond = -1L
     private var timelineDurationSecond = -1L
     private var chooser: AlertDialog? = null
     private val hide = Runnable { if (player.isPlaying && !dialogOpen) hideControls() }
 
     private val factory = DefaultHttpDataSource.Factory()
-        .setUserAgent(source.userAgent.ifEmpty { "BahaPlusTV/0.1" })
+        .setUserAgent(NativeApiClient.AGENT)
         .setConnectTimeoutMs(12000).setReadTimeoutMs(15000)
         .setAllowCrossProtocolRedirects(false)
         .setDefaultRequestProperties(mapOf("Referer" to "https://ani.gamer.com.tw/", "Origin" to "https://ani.gamer.com.tw"))
@@ -108,12 +133,25 @@ class NativePlayback(
     private val tick = object : Runnable {
         override fun run() {
             if (released) return
-            if (committed && foreground) {
-                updateTimeline()
-                if (!clockPending) clock()
-                if (SystemClock.elapsedRealtime() - lastClockAck > 8000) fail("official-session-unresponsive")
+            if (foreground && phase == "advertisement") {
+                adWatch.sample(player.currentPosition.coerceAtLeast(0) / 1000.0, player.isPlaying,
+                    false, SystemClock.elapsedRealtime())
+                val available = adStartAcknowledged && adWatch.total >= 30 && !adFinishing
+                if (available && !adSkip.isEnabled) adSkip.requestFocus()
+                adSkip.isEnabled = available
+                adSkip.text = if (available) tr("跳过广告", "跳過廣告")
+                    else tr("广告 ", "廣告 ") + ceil((30 - adWatch.total).coerceAtLeast(0.0)).toInt() + tr(" 秒", " 秒")
+                adLabel.text = tr("正在播放官方广告", "正在播放官方廣告")
             }
-            handler.postDelayed(this, 1000)
+            if (committed) {
+                sampleWatch(foreground && player.isPlaying)
+                updateTimeline()
+                if (watch.total >= nextProgress && !progressPending) {
+                    nextProgress += 60
+                    reportProgress()
+                }
+            }
+            handler.postDelayed(this, 250)
         }
     }
 
@@ -123,7 +161,6 @@ class NativePlayback(
         video.player = player
         player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
         player.setHandleAudioBecomingNoisy(true)
-        player.setPlaybackSpeed(preferences.speed)
         controls.addView(heading)
         controls.addView(timeline, LinearLayout.LayoutParams(-1, -2).apply { topMargin = TvStyle.dp(context, 7) })
         val playbackRow = TvStyle.horizontal(context)
@@ -166,6 +203,11 @@ class NativePlayback(
         controls.addView(optionsRow)
         view.addView(controls, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         view.addView(status, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
+        adPanel.addView(adLabel, LinearLayout.LayoutParams(0, -2, 1f))
+        adPanel.addView(adSkip)
+        adPanel.addView(adToggle)
+        adPanel.addView(adExit)
+        view.addView(adPanel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 if (!released && foreground) updateTimeline()
@@ -173,11 +215,19 @@ class NativePlayback(
             override fun onPlaybackStateChanged(state: Int) {
                 if (released) return
                 Diagnostics.record("player.state", "state" to state)
-                if (state == Player.STATE_READY && !committed && !committing) commit()
-                status.visibility = if (state == Player.STATE_BUFFERING || !committed) View.VISIBLE else View.GONE
+                if (state == Player.STATE_READY && phase == "starting") startContent()
+                status.visibility = if (state == Player.STATE_BUFFERING || phase in setOf("preparing", "source", "starting"))
+                    View.VISIBLE else View.GONE
+                if (phase == "advertisement" && state == Player.STATE_ENDED) {
+                    adWatch.sample(player.currentPosition.coerceAtLeast(0) / 1000.0, foreground,
+                        false, SystemClock.elapsedRealtime())
+                    if (adWatch.total >= 30) finishAd() else fail("short-ad-needs-fallback")
+                }
                 if (committed && state == Player.STATE_ENDED && !endedSent) {
                     endedSent = true
-                    clock { accepted -> if (accepted && !released) onEnd() }
+                    sampleWatch(foreground)
+                    reportState()
+                    reportProgress { if (!released && !errorSent) onEnd() }
                 }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -186,66 +236,151 @@ class NativePlayback(
                 playButton.setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
                 playButton.contentDescription = if (isPlaying) tr("暂停", "暫停") else tr("播放", "播放")
                 if (committed && !released) {
+                    sampleWatch(foreground && isPlaying)
+                    reportState()
                     if (!isPlaying && player.playbackState != Player.STATE_ENDED) showControls()
                     else scheduleHide()
                 }
+                if (phase == "advertisement" && isPlaying && !adStartRequested) {
+                    adWatch.sample(player.currentPosition.coerceAtLeast(0) / 1000.0, foreground,
+                        false, SystemClock.elapsedRealtime())
+                    adStartRequested = true
+                    async({ session.startAd() }) {
+                        adStartAcknowledged = true
+                        if (player.playbackState == Player.STATE_ENDED) finishAd()
+                    }
+                }
+            }
+            override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
+                watch.discontinuity()
+                adWatch.discontinuity()
             }
             override fun onPlayerError(error: PlaybackException) {
                 fail("media-${error.errorCode}")
             }
         })
-        load(currentQuality, (source.position * 1000).toLong(), false)
         handler.post(tick)
-        handler.postDelayed({ if (!released && !committed) fail("native-initialize-timeout") }, 25000)
+        async({ session.prepare(videoId) }) {
+            preparation = it
+            phase = "consent"
+            status.text = it.title
+            if (foreground) showConsent()
+        }
     }
 
-    private fun commit() {
-        committing = true
-        portal.commitNative { result ->
-            if (released) return@commitNative
-            if (result == null) {
-                portal.failNative()
-                fail("official-handoff-rejected")
-                return@commitNative
+    private fun showConsent() {
+        if (phase != "consent" || consentDialog != null || released) return
+        val warning = when (preparation?.rating) {
+            1 -> tr("普遍级：一般观众皆可观看。", "普遍級：一般觀眾皆可觀看。")
+            2 -> tr("保护级：未满 6 岁不宜观看，6～11 岁应由成人陪同。", "保護級：未滿 6 歲不宜觀看，6～11 歲應由成人陪同。")
+            3 -> tr("辅 12 级：未满 12 岁不宜观看。", "輔 12 級：未滿 12 歲不宜觀看。")
+            4 -> tr("辅 15 级：未满 15 岁不宜观看。", "輔 15 級：未滿 15 歲不宜觀看。")
+            else -> tr("限制级：未满 18 岁不宜观看，仍须通过官方年龄验证。", "限制級：未滿 18 歲不宜觀看，仍須通過官方年齡驗證。")
+        }
+        consentDialog = AlertDialog.Builder(context).setTitle(tr("官方分级提示", "官方分級提示"))
+            .setMessage(warning).setPositiveButton(tr("同意并继续", "同意並繼續")) { _, _ ->
+                consentDialog = null
+                session.consent()
+                if (preparation?.needsAd == true) startAd() else requestSource()
+            }.setNegativeButton(tr("不同意，返回详情", "不同意，返回詳情")) { _, _ -> onExit() }
+            .setOnCancelListener { onExit() }.create().apply {
+                show()
+                getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
             }
-            val position = result.optDouble("position", source.position)
-            if (!position.isFinite() || position < 0 || position > source.duration + 1) {
-                fail("official-timeline-invalid")
-                return@commitNative
-            }
-            player.seekTo((position * 1000).toLong())
+    }
+
+    private fun startAd() {
+        val ad = preparation?.ad ?: return fail("ad-missing")
+        phase = "advertisement"
+        adPanel.visibility = View.VISIBLE
+        status.visibility = View.GONE
+        player.setPlaybackSpeed(1f)
+        player.setMediaItem(MediaItem.fromUri(ad.playlist))
+        player.prepare()
+        player.playWhenReady = foreground
+        adExit.requestFocus()
+    }
+
+    private fun finishAd() {
+        if (released || phase != "advertisement" || adFinishing || !adStartAcknowledged || adWatch.total < 30) return
+        adFinishing = true
+        player.pause()
+        adSkip.isEnabled = false
+        val seconds = adWatch.total
+        async({ session.endAd(seconds) }) { requestSource() }
+    }
+
+    private fun requestSource() {
+        phase = "source"
+        adPanel.visibility = View.GONE
+        status.visibility = View.VISIBLE
+        status.text = tr("正在取得官方播放源", "正在取得官方播放來源")
+        async({ session.source() }) { source ->
+            phase = "starting"
+            player.setPlaybackSpeed(preferences.speed)
+            applyQuality()
+            val position = (preparation?.breakpoint ?: 0.0).coerceIn(0.0, 172800.0)
+            player.setMediaItem(MediaItem.fromUri(source), (position * 1000).toLong())
+            player.playWhenReady = false
+            player.prepare()
+        }
+    }
+
+    private fun startContent() {
+        phase = "activating"
+        async({ session.started() }) {
             committed = true
-            lastClockAck = SystemClock.elapsedRealtime()
+            phase = "content"
             status.visibility = View.GONE
             onActive()
-            player.playWhenReady = !result.optBoolean("paused", false) && foreground
+            player.playWhenReady = foreground
             showControls()
-            clock()
+            reportProgress()
         }
     }
-    private fun clock(callback: (Boolean) -> Unit = {}) {
-        if (!committed || released) { callback(false); return }
-        val duration = player.duration.takeIf { it > 0 } ?: (source.duration * 1000).toLong()
-        val position = player.currentPosition.coerceIn(0, duration)
-        val state = JSONObject().put("position", position / 1000.0).put("duration", duration / 1000.0)
-            .put("paused", !player.isPlaying).put("rate", player.playbackParameters.speed.toDouble())
-            .put("muted", player.volume == 0f).put("buffered", player.bufferedPosition.coerceAtLeast(0) / 1000.0)
-            .put("seeking", false).put("ended", player.playbackState == Player.STATE_ENDED)
-        clockPending = true
-        portal.clock(state) { accepted ->
-            if (released) return@clock
-            clockPending = false
-            if (accepted) lastClockAck = SystemClock.elapsedRealtime()
-            else fail("official-session-denied")
-            callback(accepted)
+
+    private fun sampleWatch(playing: Boolean) {
+        watch.sample(player.currentPosition.coerceAtLeast(0) / 1000.0, playing,
+            false, SystemClock.elapsedRealtime(), player.playbackParameters.speed.toDouble())
+    }
+
+    private fun reportState() {
+        if (!committed || released || statePending || errorSent) return
+        statePending = true
+        val seconds = watch.total
+        async({ session.state(seconds) }) { statePending = false }
+    }
+
+    private fun reportProgress(after: () -> Unit = {}) {
+        if (!committed || released || player.duration <= 0 || errorSent) return
+        // The final report must be queued even if a periodic report is outstanding.
+        if (progressPending && !endedSent) return
+        val duration = player.duration / 1000.0
+        val position = (player.currentPosition / 1000.0).coerceIn(0.0, duration)
+        progressPending = true
+        async({ session.progress(position, duration) }) {
+            progressPending = false
+            Diagnostics.record("player.progress", "code" to it)
+            after()
         }
     }
-    private fun load(quality: Int, position: Long, play: Boolean) {
-        val url = source.variants[quality] ?: source.master
-        player.setMediaItem(MediaItem.fromUri(url), position.coerceAtLeast(0))
-        player.playWhenReady = play
-        player.prepare()
-        updateTimeline()
+
+    private fun <T> async(operation: () -> T, done: (T) -> Unit) {
+        if (released || errorSent) return
+        worker.execute {
+            try {
+                val value = operation()
+                handler.post { if (!released && !errorSent) done(value) }
+            } catch (error: Exception) {
+                val code = if (error is ApiFailure) error.stage else "native-protocol"
+                handler.post { if (!released && !errorSent) fail(code) }
+            }
+        }
+    }
+
+    private fun applyQuality() {
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setMaxVideoSize(Int.MAX_VALUE, if (currentQuality == 0) Int.MAX_VALUE else currentQuality).build()
     }
     private fun toggle() {
         if (released || !committed) return
@@ -254,16 +389,17 @@ class NativePlayback(
             player.seekTo(0)
             player.play()
         } else if (player.isPlaying || player.playWhenReady) player.pause() else player.play()
-        clock()
+        reportState()
     }
     private fun seek(delta: Long) {
         if (!committed || released) return
         val duration = player.duration.takeIf { it > 0 } ?: return
+        watch.discontinuity()
         player.seekTo((player.currentPosition + delta).coerceIn(0, duration))
         Diagnostics.record("player.seek", "positionSeconds" to player.currentPosition / 1000)
         endedSent = false
         updateTimeline()
-        clock()
+        reportProgress()
     }
     private fun updateTimeline() {
         // Official clock updates continue independently while the controls are hidden.
@@ -304,7 +440,12 @@ class NativePlayback(
         return true
     }
     fun handle(event: KeyEvent): Boolean {
-        if (released || !committed) return false
+        if (released) return false
+        if (phase == "advertisement" && event.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) adToggle.performClick()
+            return true
+        }
+        if (!committed) return false
         val key = event.keyCode
         if (key == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_UP) handleBack()
@@ -336,14 +477,16 @@ class NativePlayback(
         return true
     }
     private fun chooseQuality() {
-        val values = listOf(0) + source.variants.keys.sortedDescending()
+        val heights = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
+            .flatMap { group -> (0 until group.length).map { group.getTrackFormat(it).height } }
+            .filter { it in 144..4320 }.distinct().sortedDescending()
+        val values = listOf(0) + heights
         showChoice(tr("画质", "畫質"), values.map { if (it == 0) tr("自动", "自動") else "${it}p" }, values.indexOf(currentQuality)) { index ->
             currentQuality = values[index]
             Diagnostics.record("player.quality", "quality" to currentQuality)
             preferences.quality = currentQuality
-            val position = player.currentPosition
-            val playing = player.playWhenReady
-            load(currentQuality, position, playing)
+            watch.discontinuity()
+            applyQuality()
             qualityButton.text = qualityLabel()
         }
     }
@@ -351,9 +494,10 @@ class NativePlayback(
         val speeds = listOf(.5f, .75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
         showChoice(tr("播放速度", "播放速度"), speeds.map { "${it}×" }, speeds.indexOf(preferences.speed)) { index ->
             preferences.speed = speeds[index]
+            watch.discontinuity()
             player.setPlaybackSpeed(speeds[index])
             speedButton.text = context.getString(R.string.playback_speed, speeds[index].toString())
-            clock()
+            reportState()
         }
     }
     private fun chooseEpisode() {
@@ -377,31 +521,60 @@ class NativePlayback(
     private fun fail(code: String) {
         if (released || errorSent) return
         errorSent = true
+        phase = "error"
         player.pause()
-        portal.failNative()
+        session.close()
         onError(code)
     }
     fun pauseForLifecycle() {
+        resumeAd = phase == "advertisement" && player.playWhenReady
+        if (phase == "advertisement") adWatch.sample(player.currentPosition.coerceAtLeast(0) / 1000.0,
+            foreground && player.isPlaying, false, SystemClock.elapsedRealtime())
         foreground = false
+        sampleWatch(player.isPlaying)
         player.pause()
-        clock()
+        watch.discontinuity()
+        adWatch.discontinuity()
+        reportState()
+        reportProgress()
     }
     fun resumeLifecycle() {
         foreground = true
-        lastClockAck = SystemClock.elapsedRealtime()
-        showControls()
+        if (phase == "consent") showConsent()
+        if (committed) showControls()
+        else if (phase == "advertisement") {
+            if (resumeAd && !adFinishing) player.play()
+            adExit.requestFocus()
+        }
     }
     fun release() {
         if (released) return
+        val duration = player.duration / 1000.0
+        val position = if (duration > 0) (player.currentPosition / 1000.0).coerceIn(0.0, duration) else 0.0
+        val shouldReport = committed && !errorSent && duration > 0
+        sampleWatch(player.isPlaying)
         player.pause()
-        clock()
         released = true
+        if (!shouldReport) session.close()
         handler.removeCallbacksAndMessages(null)
         chooser?.dismiss()
         chooser = null
+        consentDialog?.dismiss()
+        consentDialog = null
         video.player = null
         player.release()
         view.keepScreenOn = false
+        worker.execute {
+            try {
+                if (shouldReport) {
+                    session.state(watch.total)
+                    session.progress(position, duration)
+                }
+            } catch (_: Exception) {
+                // Closing the page must not show a stale playback error.
+            } finally { session.close() }
+        }
+        worker.shutdown()
     }
     private fun tr(simplified: String, traditional: String) = preferences.text(simplified, traditional)
     companion object {

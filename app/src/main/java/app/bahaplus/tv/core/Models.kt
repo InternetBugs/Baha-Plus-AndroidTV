@@ -110,28 +110,5 @@ data class WatchEntry(val anime: Anime, val videoId: String, val label: String, 
     }
 }
 
-data class NativeSource(val master: String, val variants: Map<Int, String>, val position: Double, val duration: Double,
-                        val paused: Boolean, val rate: Float, val userAgent: String) {
-    companion object {
-        fun parse(json: JSONObject): NativeSource {
-            val master = json.getString("master")
-            val position = json.getDouble("position")
-            val duration = json.getDouble("duration")
-            val rate = json.optDouble("rate", 1.0)
-            val variants = json.optJSONArray("variants")?.objects().orEmpty().associate {
-                val height = it.getInt("height")
-                val url = it.getString("url")
-                require(height in 144..4320 && OfficialSite.media(url))
-                height to url
-            }
-            require(OfficialSite.media(master) && variants.size <= 20 && duration.isFinite() && duration > 0 &&
-                duration <= 172800 && position.isFinite() && position >= 0 && position <= duration + 1 &&
-                rate.isFinite() && rate in 0.5..2.0)
-            return NativeSource(master, variants, position, duration, json.getBoolean("paused"), rate.toFloat(),
-                json.optString("userAgent").take(1000))
-        }
-    }
-}
-
 fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 fun JSONArray.strings(): List<String> = (0 until length()).map { getString(it) }

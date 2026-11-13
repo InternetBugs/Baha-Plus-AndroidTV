@@ -19,17 +19,6 @@ class ModelsTest {
             "https://user:secret@bahamut.akamaized.net/a.m3u8", "https://bahamut.akamaized.net/a.m3u8#fragment",
             "https://bahamut.akamaized.net/a.mp4").forEach { assertFalse(it, OfficialSite.media(it)) }
     }
-    @Test fun progressRejectsAnUnboundedOrInvalidNativeClock() {
-        val valid = JSONObject("""{"master":"https://bahamut.akamaized.net/a.m3u8","variants":[],"position":42,"duration":120,"paused":false,"rate":1}""")
-        assertEquals(42.0, NativeSource.parse(valid).position, .001)
-        for (position in listOf(-1.0, 99999.0)) {
-            val invalid = JSONObject(valid.toString()).put("position", position)
-            assertThrows(IllegalArgumentException::class.java) { NativeSource.parse(invalid) }
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            NativeSource.parse(JSONObject(valid.toString()).put("duration", 172801))
-        }
-    }
     @Test fun historyRejectsOutOfRangeOfficialProgress() {
         val item = JSONObject("""{"anime":{"id":"1","title":"動畫","cover":"https://p2.bahamut.com.tw/a.jpg","sections":[]},"videoId":"2","episodeLabel":"第 1 集","progress":0.5,"progressLabel":"10:00"}""")
         assertEquals(.5, WatchEntry.parse(item).progress!!, .001)
