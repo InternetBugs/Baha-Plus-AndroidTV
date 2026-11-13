@@ -2,6 +2,7 @@ package app.bahaplus.tv.data
 
 import app.bahaplus.tv.core.Anime
 import app.bahaplus.tv.core.AnimeDetail
+import app.bahaplus.tv.core.RatingSummary
 import java.util.concurrent.Future
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -20,13 +21,21 @@ internal class AnimeDetailLoader(
     @Volatile private var closed = false
 
     fun load(anime: Anime, videoId: String?, onResult: (Result<AnimeDetail>) -> Unit) {
+        submit({ it.detail(anime, videoId) }, onResult)
+    }
+
+    fun loadRating(fanId: String, onResult: (Result<RatingSummary>) -> Unit) {
+        submit({ it.rating(fanId) }, onResult)
+    }
+
+    private fun <T> submit(operation: (OfficialAnimeApi) -> T, onResult: (Result<T>) -> Unit) {
         if (closed) return
         cancel()
         val request = Request(clientFactory())
         current = request
         request.future = executor.submit {
             val result = try {
-                runCatching { request.client.detail(anime, videoId) }
+                runCatching { operation(request.client) }
             } finally {
                 request.client.close()
             }

@@ -40,6 +40,7 @@ import app.bahaplus.tv.experiment.NativeApiClient
 import app.bahaplus.tv.diagnostics.Diagnostics
 import app.bahaplus.tv.player.NativePlayback
 import app.bahaplus.tv.ui.CatalogAdapter
+import app.bahaplus.tv.ui.AnimeRatingView
 import app.bahaplus.tv.ui.CatalogRow
 import app.bahaplus.tv.ui.DiagnosticsView
 import app.bahaplus.tv.ui.QrLoginView
@@ -86,6 +87,9 @@ class MainActivity : Activity() {
     private var lastError = ""
     private var busy = true
     private val detailLoader = AnimeDetailLoader(deliver = { handler.post(it) })
+    private val ratingLoader = AnimeDetailLoader(deliver = { handler.post(it) })
+    private var ratingView: AnimeRatingView? = null
+    private var ratingLoading = false
     private val catalogLoader = NativeTaskLoader { handler.post(it) }
     private val searchLoader = NativeTaskLoader { handler.post(it) }
     private val accountLoader = NativeTaskLoader { handler.post(it) }
@@ -241,6 +245,8 @@ class MainActivity : Activity() {
         Diagnostics.record("ui.tab", "screen" to key)
         if (detailsOpen) {
             detailLoader.cancel()
+            ratingLoader.cancel()
+            ratingLoading = false
             autoStartVideo = null
             detailsOpen = false
         }
@@ -262,6 +268,7 @@ class MainActivity : Activity() {
         content.removeAllViews()
         grid = null
         episodeGrid = null
+        ratingView = null
         settingsScroll = null
         updateCheckButton = null
         gridStateKey = null
@@ -478,6 +485,8 @@ class MainActivity : Activity() {
     private fun openDetail(anime: Anime, resumeVideo: String? = null) {
         Diagnostics.record("ui.detail")
         detailLoader.cancel()
+        ratingLoader.cancel()
+        ratingLoading = false
         saveGrid()
         detailsOpen = true
         selectedAnime = anime
@@ -496,6 +505,8 @@ class MainActivity : Activity() {
         requestDetail(anime, resumeVideo)
     }
     private fun requestDetail(anime: Anime, resumeVideo: String? = autoStartVideo) {
+        ratingLoader.cancel()
+        ratingLoading = false
         detailLoading = true
         detailFailed = false
         render()
@@ -512,12 +523,14 @@ class MainActivity : Activity() {
             detailLoading = false
             result.fold(onSuccess = { detail ->
                 Diagnostics.record("detail.completed", "count" to detail.episodes.size)
-                detailCache[detail.animeId] = detail
-                currentDetail = detail
+                val cachedRating = currentDetail?.takeIf { it.ratingFanId == detail.ratingFanId }?.rating
+                val updated = detail.copy(rating = cachedRating)
+                detailCache[detail.animeId] = updated
+                currentDetail = updated
                 render()
                 val video = autoStartVideo
                 autoStartVideo = null
-                if (video != null) play(video)
+                if (video != null) play(video) else requestRating(updated)
             }, onFailure = { error ->
                 detailFailed = true
                 lastError = (error as? AnimeDetailException)?.code ?: "detail-invalid"
@@ -525,6 +538,21 @@ class MainActivity : Activity() {
                 render()
                 if (currentDetail != null) showNotice(tr("详情更新失败，请稍后重试。", "詳情更新失敗，請稍後重試。"))
             })
+        }
+    }
+    private fun requestRating(detail: AnimeDetail) {
+        val fanId = detail.ratingFanId ?: return
+        ratingLoading = true
+        ratingView?.bind(detail.score, detail.rating, loading = true)
+        ratingLoader.loadRating(fanId) { result ->
+            if (isFinishing || isDestroyed || !detailsOpen || playingVideo.isNotEmpty() ||
+                currentDetail?.animeId != detail.animeId || currentDetail?.ratingFanId != fanId) return@loadRating
+            ratingLoading = false
+            result.onSuccess { rating ->
+                currentDetail = currentDetail?.copy(rating = rating)
+                currentDetail?.let { detailCache[it.animeId] = it }
+            }
+            currentDetail?.let { ratingView?.bind(it.score, it.rating, loading = false) }
         }
     }
     private fun renderDetail() {
@@ -580,6 +608,13 @@ class MainActivity : Activity() {
         info.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
         header.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
         content.addView(header)
+        if (detail.score != null || detail.ratingFanId != null) {
+            val ratings = AnimeRatingView(this, preferences.traditional).apply {
+                bind(detail.score, detail.rating, ratingLoading || detailLoading)
+            }
+            ratingView = ratings
+            content.addView(ratings, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        }
         content.addView(TvStyle.label(this, tr("选集", "選集"), 21f, bold = true).apply { setPadding(0, dp(18), 0, dp(10)) })
         if (detail.episodes.isEmpty()) {
             empty(tr("暂未读取到可播放集数", "暫未讀取到可播放集數"), tr("请刷新详情后重试。", "請重新整理詳情後重試。")) {
@@ -654,6 +689,8 @@ class MainActivity : Activity() {
         val detail = currentDetail ?: return
         if (detail.episodes.none { it.id == videoId }) return
         detailLoader.cancel()
+        ratingLoader.cancel()
+        ratingLoading = false
         detailLoading = false
         Diagnostics.record("player.request")
         diagnosticPhase = ""
@@ -743,6 +780,7 @@ class MainActivity : Activity() {
         detailsOpen = true
         render()
         focusContent()
+        currentDetail?.takeIf { it.rating == null }?.let(::requestRating)
         syncAccount()
     }
 
@@ -1124,6 +1162,8 @@ class MainActivity : Activity() {
         }
         else if (detailsOpen) {
             detailLoader.cancel()
+            ratingLoader.cancel()
+            ratingLoading = false
             detailsOpen = false
             autoStartVideo = null
             render()
@@ -1175,6 +1215,7 @@ class MainActivity : Activity() {
         accountLoader.destroy()
         favoriteLoader.destroy()
         detailLoader.destroy()
+        ratingLoader.destroy()
         closeQrLogin()
         activeDialog?.dismiss()
         native?.release()

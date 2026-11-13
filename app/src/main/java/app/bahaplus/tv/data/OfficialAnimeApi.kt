@@ -4,6 +4,7 @@ import app.bahaplus.tv.core.Anime
 import app.bahaplus.tv.core.AnimeDetail
 import app.bahaplus.tv.core.Episode
 import app.bahaplus.tv.core.OfficialSite
+import app.bahaplus.tv.core.RatingSummary
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -76,13 +77,49 @@ internal class OfficialAnimeApi(
             for ((label, key) in listOf("導演" to "director", "製作廠商" to "maker", "代理商" to "publisher")) {
                 add(label, text(series, key, 4000))
             }
-            if (!series.isNull("score")) {
+            val average = if (!series.isNull("score")) {
                 val score = series.get("score")
                 require(score is Number && score.toDouble().isFinite() && score.toDouble() in 0.0..5.0)
                 add("評分", "$score / 5")
-            }
+                score.toDouble()
+            } else null
+            val fanId = series.opt("fanId")?.toString()?.takeIf(::validId)
             checkOpen()
-            return AnimeDetail(anime.id, title, description, poster, episodes.values.toList(), metadata)
+            return AnimeDetail(anime.id, title, description, poster, episodes.values.toList(), metadata,
+                score = average, ratingFanId = fanId)
+        } catch (error: AnimeDetailException) {
+            throw error
+        } catch (_: IOException) {
+            throw AnimeDetailException(if (closed) "detail-cancelled" else "detail-network")
+        } catch (_: Exception) {
+            throw AnimeDetailException(if (closed) "detail-cancelled" else "detail-invalid")
+        }
+    }
+
+    /** fanId is supplied by the verified video detail, not the animeSn or acgSn. */
+    fun rating(fanId: String): RatingSummary {
+        try {
+            require(validId(fanId))
+            val data = request(URL("$API/acg/v1/reviews_list.php?sn=$fanId&t=4"))
+            val rating = data.getJSONObject("rating")
+            fun count(json: JSONObject, key: String): Int {
+                val value = json.get(key)
+                require(value is Number && value.toDouble().isFinite() &&
+                    value.toDouble() in 0.0..Int.MAX_VALUE.toDouble() &&
+                    value.toDouble() == value.toInt().toDouble())
+                return value.toInt()
+            }
+            val total = count(rating, "count")
+            val average = if (total == 0 && rating.isNull("avg")) 0.0 else {
+                val value = rating.get("avg")
+                require(value is Number)
+                value.toDouble()
+            }
+            val chart = rating.getJSONObject("star_chart")
+            require(chart.keys().asSequence().toSet() == (1..5).map { it.toString() }.toSet())
+            val result = RatingSummary(average, total, (1..5).map { count(chart, it.toString()) })
+            checkOpen()
+            return result
         } catch (error: AnimeDetailException) {
             throw error
         } catch (_: IOException) {

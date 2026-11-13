@@ -72,13 +72,26 @@ data class Episode(val id: String, val label: String) {
     }
 }
 
+/** Distribution is ordered from one to five stars. Counts always come from the official API. */
+data class RatingSummary(val average: Double, val count: Int, val distribution: List<Int>) {
+    init {
+        require(average.isFinite() && average in 0.0..5.0 && count >= 0)
+        require(distribution.size == 5 && distribution.all { it >= 0 })
+        require(distribution.sumOf { it.toLong() } == count.toLong())
+        require(if (count == 0) average == 0.0 else average >= 1.0)
+    }
+}
+
 data class AnimeDetail(
     val animeId: String,
     val title: String,
     val description: String,
     val poster: String?,
     val episodes: List<Episode>,
-    val metadata: List<Pair<String, String>>
+    val metadata: List<Pair<String, String>>,
+    val score: Double? = null,
+    val ratingFanId: String? = null,
+    val rating: RatingSummary? = null
 ) {
     companion object {
         fun parse(id: String, json: JSONObject): AnimeDetail {

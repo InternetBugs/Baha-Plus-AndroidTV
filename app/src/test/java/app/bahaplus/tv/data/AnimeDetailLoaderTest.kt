@@ -60,4 +60,23 @@ class AnimeDetailLoaderTest {
             assertEquals(2, attempt)
         } finally { loader.destroy() }
     }
+
+    @Test fun changingSeriesOrLeavingThePageRetiresQueuedRatingResults() {
+        val deliveries = LinkedBlockingQueue<() -> Unit>()
+        val loader = AnimeDetailLoader(deliver = { deliveries.add(it) }, clientFactory = {
+            OfficialAnimeApi { OfficialAnimeApiTest.Response(it, OfficialRatingApiTest.fixture().toString()) }
+        })
+        try {
+            loader.loadRating("67798") { fail("Previous series rating was delivered") }
+            val old = deliveries.poll(5, TimeUnit.SECONDS) ?: error("No rating")
+            loader.loadRating("67799") { assertEquals(649, it.getOrThrow().count) }
+            val fresh = deliveries.poll(5, TimeUnit.SECONDS) ?: error("No replacement rating")
+            old()
+            fresh()
+            loader.loadRating("67798") { fail("Rating arrived after leaving the page") }
+            val queued = deliveries.poll(5, TimeUnit.SECONDS) ?: error("No queued rating")
+            loader.cancel()
+            queued()
+        } finally { loader.destroy() }
+    }
 }
