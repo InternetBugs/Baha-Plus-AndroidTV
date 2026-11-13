@@ -11,12 +11,14 @@ import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import app.bahaplus.tv.core.OfficialSite
 import app.bahaplus.tv.core.Preferences
+import app.bahaplus.tv.diagnostics.Diagnostics
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -113,6 +115,7 @@ class OfficialPortal(
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                Diagnostics.record("web.started", "purpose" to purpose.name)
                 ready = false
                 handler.removeCallbacks(poll)
                 document = UUID.randomUUID().toString()
@@ -130,6 +133,7 @@ class OfficialPortal(
             }
             override fun onPageFinished(view: WebView, url: String) {
                 if (destroyed || url != view.url) return
+                Diagnostics.record("web.finished", "purpose" to purpose.name)
                 if (!OfficialSite.trusted(url)) {
                     if (purpose == Purpose.LOGIN) onVisible(true, "login")
                     return
@@ -153,7 +157,14 @@ class OfficialPortal(
                 }
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) emit("navigation-error")
+                if (request.isForMainFrame) {
+                    Diagnostics.record("web.error", "webError" to error.errorCode, "purpose" to purpose.name)
+                    emit("navigation-error")
+                }
+            }
+            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                if (request.isForMainFrame) Diagnostics.record("web.http-error",
+                    "httpStatus" to response.statusCode, "purpose" to purpose.name)
             }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 destroyed = true
@@ -225,6 +236,7 @@ class OfficialPortal(
         webView.loadUrl(OfficialSite.HOME)
     }
     fun login() {
+        Diagnostics.record("account.login")
         cancelQrLogin()
         purpose = Purpose.LOGIN
         ready = false
@@ -232,6 +244,7 @@ class OfficialPortal(
         webView.loadUrl(OfficialSite.ACCOUNT)
     }
     fun qrLogin() {
+        Diagnostics.record("account.login")
         if (destroyed) return
         cancelQrLogin()
         purpose = Purpose.QR_LOGIN
@@ -370,6 +383,7 @@ class OfficialPortal(
         webView.reload()
     }
     fun logout(after: () -> Unit) {
+        Diagnostics.record("account.logout")
         // Only one account is supported. Clear its official browser session.
         CookieManager.getInstance().removeAllCookies {
             CookieManager.getInstance().flush()

@@ -3,10 +3,13 @@ package app.bahaplus.tv
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Debug
@@ -29,14 +32,18 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.recyclerview.widget.RecyclerView
 import androidx.webkit.WebViewCompat
 import app.bahaplus.tv.core.*
+import app.bahaplus.tv.data.GitHubUpdateChecker
 import app.bahaplus.tv.data.OfficialPortal
 import app.bahaplus.tv.data.PosterLoader
+import app.bahaplus.tv.diagnostics.Diagnostics
 import app.bahaplus.tv.player.NativePlayback
 import app.bahaplus.tv.ui.CatalogAdapter
 import app.bahaplus.tv.ui.CatalogRow
+import app.bahaplus.tv.ui.DiagnosticsView
 import app.bahaplus.tv.ui.RemoteCursor
 import app.bahaplus.tv.ui.QrLoginView
 import app.bahaplus.tv.ui.TvStyle
@@ -121,11 +128,22 @@ class MainActivity : Activity() {
     private var primaryContent: View? = null
     private var activeDialog: AlertDialog? = null
     private var qrLoginView: QrLoginView? = null
+    private var diagnosticsView: DiagnosticsView? = null
+    private var diagnosticPhase = ""
+    private lateinit var updateChecker: GitHubUpdateChecker
+    private var updateChecking = false
+    private var manualUpdateCheck = false
+    private var updateCheckButton: TextView? = null
+    private var pendingUpdateResult: UpdateCheckResult? = null
+    private var updateUiResumed = false
+    private val presentUpdateResult = Runnable { showPendingUpdateResult() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         preferences = Preferences(this)
+        Diagnostics.record("app.created")
         posters = PosterLoader(this, preferences.lowResources)
+        updateChecker = GitHubUpdateChecker(BuildConfig.VERSION_NAME)
         tab = savedInstanceState?.getString("tab")?.takeIf { it in setOf("home", "search", "favorites", "history", "settings") } ?: "home"
         searchQuery = savedInstanceState?.getString("query").orEmpty().take(200)
         searchDraft = searchQuery
@@ -145,6 +163,7 @@ class MainActivity : Activity() {
         root.addView(playerLayer, FrameLayout.LayoutParams(-1, -1))
         createPortal()
         render()
+        checkForUpdates(manual = false)
     }
 
     private fun buildShell() {
@@ -284,6 +303,7 @@ class MainActivity : Activity() {
     }
 
     private fun changeTab(key: String) {
+        Diagnostics.record("ui.tab", "screen" to key)
         if (detailsOpen) detailsOpen = false
         saveGrid()
         tab = key
@@ -293,7 +313,8 @@ class MainActivity : Activity() {
         }
     }
     private fun render(restoreFocus: Boolean = true) {
-        if (!::content.isInitialized || native != null || playingVideo.isNotEmpty() || browserVisible || qrLoginView != null) return
+        if (!::content.isInitialized || native != null || playingVideo.isNotEmpty() || browserVisible ||
+            qrLoginView != null || diagnosticsView != null) return
         val restoreContentFocus = restoreFocus && content.hasFocus()
         shell.visibility = View.VISIBLE
         playerLayer.visibility = View.GONE
@@ -305,6 +326,7 @@ class MainActivity : Activity() {
         grid = null
         episodeGrid = null
         settingsScroll = null
+        updateCheckButton = null
         gridStateKey = null
         primaryContent = null
         navigation.forEach { (key, view) -> view.isSelected = key == tab }
@@ -494,6 +516,7 @@ class MainActivity : Activity() {
         }
     }
     private fun submitSearch(raw: String) {
+        Diagnostics.record("ui.search")
         val query = raw.trim().codePoints().limit(100).toArray().let { String(it, 0, it.size) }
         if (query.isBlank() || !portalAvailable) return
         (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(window.decorView.windowToken, 0)
@@ -506,6 +529,7 @@ class MainActivity : Activity() {
     }
 
     private fun openDetail(anime: Anime, resumeVideo: String? = null) {
+        Diagnostics.record("ui.detail")
         saveGrid()
         detailsOpen = true
         selectedAnime = anime
@@ -639,6 +663,8 @@ class MainActivity : Activity() {
         val detail = currentDetail ?: return
         val anime = selectedAnime ?: return
         if (!portalAvailable || detail.episodes.none { it.id == videoId }) return
+        Diagnostics.record("player.request")
+        diagnosticPhase = ""
         activeDialog?.dismiss()
         val previous = native
         previous?.release()
@@ -660,9 +686,12 @@ class MainActivity : Activity() {
         val detail = playingDetail ?: return
         val source = runCatching { NativeSource.parse(body.getJSONObject("source")) }.getOrNull()
         if (source == null) { playbackError("native-source-unavailable"); return }
+        Diagnostics.record("player.source", "count" to source.variants.size,
+            "positionSeconds" to source.position, "durationSeconds" to source.duration)
         val current = playingVideo
         val candidate = NativePlayback(this, portal, preferences, source, detail, current,
             onActive = {
+                Diagnostics.record("player.active")
                 if (playingVideo == current) {
                     showBrowser(false, "")
                     shell.visibility = View.GONE
@@ -677,6 +706,7 @@ class MainActivity : Activity() {
         playerLayer.addView(candidate.view, FrameLayout.LayoutParams(-1, -1))
     }
     private fun ended() {
+        Diagnostics.record("player.ended", "autoNext" to preferences.autoNext)
         val detail = playingDetail ?: return
         val index = detail.episodes.indexOfFirst { it.id == playingVideo }
         val next = detail.episodes.getOrNull(index + 1)
@@ -697,6 +727,7 @@ class MainActivity : Activity() {
             .setNegativeButton(tr("返回详情", "返回詳情")) { _, _ -> exitPlayback() }.show()
     }
     private fun playbackError(code: String) {
+        Diagnostics.record("player.error", "code" to code)
         if (isFinishing || playbackErrorVisible || playingVideo.isEmpty()) return
         playbackErrorVisible = true
         lastError = code.take(80)
@@ -713,6 +744,7 @@ class MainActivity : Activity() {
     }
     private fun exitPlayback() {
         if (playingVideo.isEmpty()) return
+        Diagnostics.record("player.exit")
         activeDialog?.dismiss()
         activeDialog = null
         native?.release()
@@ -732,6 +764,7 @@ class MainActivity : Activity() {
     }
 
     private fun showBrowser(visible: Boolean, reason: String) {
+        if (visible && diagnosticsView != null) return
         if (!::browserPane.isInitialized) return
         val wasVisible = browserVisible
         browserVisible = visible
@@ -760,6 +793,7 @@ class MainActivity : Activity() {
                 render()
                 if (detailsOpen) focusContent() else navigation[tab]?.requestFocus()
             } else native?.showControls()
+            handler.post(presentUpdateResult)
         }
     }
     private fun browserActionKeys(button: TextView) {
@@ -875,6 +909,7 @@ class MainActivity : Activity() {
     private fun closeQrLogin() {
         qrLoginView?.let { view -> view.dispose(); root.removeView(view) }
         qrLoginView = null
+        handler.post(presentUpdateResult)
     }
     private fun cancelQrLogin() {
         closeQrLogin()
@@ -903,6 +938,7 @@ class MainActivity : Activity() {
         accountButton.text = if (accountId == null) tr("登录账号", "登入帳號") else tr("账号", "帳號")
     }
     private fun refresh() {
+        Diagnostics.record("ui.refresh")
         busy = true
         if (!portalAvailable) {
             createPortal()
@@ -912,6 +948,7 @@ class MainActivity : Activity() {
 
     private fun onOfficialEvent(body: JSONObject) {
         if (isFinishing || isDestroyed) return
+        Diagnostics.record("official.${body.optString("type").take(80)}")
         runCatching {
             when (body.optString("type")) {
                 "qr-login-ready" -> if (qrLoginView != null && portal.purpose == OfficialPortal.Purpose.QR_LOGIN) {
@@ -986,6 +1023,11 @@ class MainActivity : Activity() {
                 }
                 "player-state" -> {
                     if (body.optString("videoId") != playingVideo) return
+                    val phase = body.optString("phase").take(40)
+                    if (phase != diagnosticPhase) {
+                        diagnosticPhase = phase
+                        Diagnostics.record("official.phase", "phase" to phase)
+                    }
                     showAgeConfirmation(body.optString("phase") == "age" && body.optBoolean("ageConfirmationAvailable"))
                     showAdSkip(body.optString("phase") == "advertisement", body.optJSONObject("adSkip"))
                     when (body.optString("phase")) {
@@ -1008,6 +1050,7 @@ class MainActivity : Activity() {
                 }
             }
         }.onFailure {
+            Diagnostics.record("official.invalid")
             qrLoginView?.error()
             lastError = "official-data-invalid"
             busy = false
@@ -1041,6 +1084,7 @@ class MainActivity : Activity() {
         showNotice(tr("请求未完成。请刷新重试，必要时完成官网验证。", "請求未完成。請重新整理重試，必要時完成官網驗證。"))
     }
     private fun onRendererGone() {
+        Diagnostics.record("web.renderer-gone")
         closeQrLogin()
         native?.release()
         native = null
@@ -1103,6 +1147,13 @@ class MainActivity : Activity() {
         setting("account", if (accountId == null) tr("登录账号", "登入帳號") else tr("账号：$accountName", "帳號：$accountName"),
             tr("登录和观看进度由官方机制处理。", "登入與觀看進度由官方機制處理。"), ::accountAction)
         setting("refresh", tr("刷新官方内容", "重新整理官方內容"), tr("重新读取首页、追番与观看历史。", "重新讀取首頁、追番與觀看紀錄。"), ::refresh)
+        setting("diagnostics", tr("日志与反馈", "日誌與回報"),
+            if (Diagnostics.recording) tr("正在记录。复现问题后在这里停止并发送日志。", "正在記錄。重現問題後在此停止並傳送日誌。")
+            else tr("记录问题过程，手机扫码取走日志并反馈给开发者。", "記錄問題過程，手機掃碼取得日誌並回報給開發者。"), ::openDiagnostics)
+        updateCheckButton = setting("updates", updateCheckLabel(),
+            tr("当前版本 ${BuildConfig.VERSION_NAME} · 从 GitHub 检查新版本", "目前版本 ${BuildConfig.VERSION_NAME} · 從 GitHub 檢查新版本")) {
+            checkForUpdates(manual = true)
+        }
         setting("compatibility", tr("系统与兼容信息", "系統與相容資訊"), tr("查看版本信息，或复制不含账号凭据的诊断信息。", "查看版本資訊，或複製不含帳號憑證的診斷資訊。")) {
             val info = compatibility()
             activeDialog = AlertDialog.Builder(this).setTitle(tr("系统与兼容信息", "系統與相容資訊")).setMessage(info)
@@ -1120,10 +1171,32 @@ class MainActivity : Activity() {
         settingsScroll = scroll
         scroll.post { scroll.scrollTo(0, settingsScrollY) }
     }
+    private fun openDiagnostics() {
+        if (diagnosticsView != null) return
+        val view = DiagnosticsView(this, preferences, onStarted = {
+            diagnosticPhase = ""
+            Diagnostics.record("app.state", "screen" to tab, "signedIn" to (accountId != null),
+                "lowResources" to preferences.lowResources, "autoNext" to preferences.autoNext,
+                "code" to lastError)
+        }, onClose = ::closeDiagnostics)
+        diagnosticsView = view
+        shell.visibility = View.GONE
+        root.addView(view, FrameLayout.LayoutParams(-1, -1))
+        view.bringToFront()
+    }
+    private fun closeDiagnostics() {
+        val view = diagnosticsView ?: return
+        view.dispose()
+        root.removeView(view)
+        diagnosticsView = null
+        render()
+        focusContent()
+        handler.post(presentUpdateResult)
+    }
     private fun compatibility(): String {
         val provider = runCatching { WebViewCompat.getCurrentWebViewPackage(this)?.versionName }.getOrNull() ?: "Unavailable"
         val memory = Debug.MemoryInfo().also { Debug.getMemoryInfo(it) }
-        return "Baha Plus TV 0.1.0\nAndroid ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}\n" +
+        return "Baha Plus TV ${BuildConfig.VERSION_NAME}\nAndroid ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}\n" +
             "ABI ${Build.SUPPORTED_ABIS.joinToString()}\nWebView $provider\n" +
             "App process PSS ${memory.totalPss / 1024} MiB\n" +
             "Low resources ${preferences.lowResources}\nLast error ${lastError.ifBlank { "none" }}"
@@ -1138,6 +1211,70 @@ class MainActivity : Activity() {
             notice.text = text
             notice.setTextColor(TvStyle.warning)
         }
+    }
+    private fun updateCheckLabel() = if (updateChecking) tr("正在检查更新…", "正在檢查更新…") else tr("检查更新", "檢查更新")
+
+    private fun checkForUpdates(manual: Boolean) {
+        manualUpdateCheck = manualUpdateCheck || manual
+        // A manual click can join the startup request; repeated clicks do not start more requests.
+        if (updateChecking) return
+        updateChecking = true
+        updateCheckButton?.text = updateCheckLabel()
+        updateChecker.check { result ->
+            if (isFinishing || isDestroyed) return@check
+            updateChecking = false
+            updateCheckButton?.text = updateCheckLabel()
+            if (result is UpdateCheckResult.Available || manualUpdateCheck) pendingUpdateResult = result
+            manualUpdateCheck = false
+            showPendingUpdateResult()
+        }
+    }
+
+    private fun showPendingUpdateResult() {
+        if (pendingUpdateResult == null || !updateUiResumed || !hasWindowFocus() || isFinishing || isDestroyed ||
+            browserVisible || qrLoginView != null || diagnosticsView != null ||
+            playingVideo.isNotEmpty() || activeDialog?.isShowing == true) return
+        val result = pendingUpdateResult
+        pendingUpdateResult = null
+        when (result) {
+            is UpdateCheckResult.Available -> showUpdateDialog(result.release)
+            UpdateCheckResult.UpToDate -> Toast.makeText(this, tr("无更新", "無更新"), Toast.LENGTH_SHORT).show()
+            UpdateCheckResult.Failed -> Toast.makeText(this,
+                tr("检查更新失败，请稍后重试", "檢查更新失敗，請稍後重試"), Toast.LENGTH_LONG).show()
+            null -> Unit
+        }
+    }
+
+    private fun showUpdateDialog(release: AppRelease) {
+        val message = tr("当前版本：", "目前版本：") + BuildConfig.VERSION_NAME + "\n" +
+            tr("最新版本：", "最新版本：") + release.versionName +
+            if (release.notes.isBlank()) "" else "\n\n" + release.notes
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(tr("发现新版本", "發現新版本"))
+            .setMessage(message)
+            .setPositiveButton(tr("前往 GitHub 下载", "前往 GitHub 下載")) { _, _ -> openReleasePage(release.pageUrl) }
+            .setNegativeButton(tr("取消", "取消"), null)
+            .create()
+        activeDialog = dialog
+        dialog.show()
+        dialog.findViewById<TextView>(android.R.id.message)?.gravity = Gravity.START
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus()
+    }
+
+    private fun openReleasePage(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE))
+        } catch (_: ActivityNotFoundException) {
+            handler.post { if (!isFinishing && !isDestroyed) {
+                showText(tr("未找到浏览器", "找不到瀏覽器"),
+                    tr("请在其他设备打开 GitHub 发版页面：\n", "請在其他裝置開啟 GitHub 發布頁面：\n") + url)
+            } }
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) handler.post(presentUpdateResult)
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (browserVisible && ::cursor.isInitialized && cursor.active) {
@@ -1159,7 +1296,9 @@ class MainActivity : Activity() {
     @SuppressLint("GestureBackNavigation")
     override fun onBackPressed() { back() }
     private fun back() {
-        if (qrLoginView != null) {
+        if (diagnosticsView != null) {
+            closeDiagnostics()
+        } else if (qrLoginView != null) {
             cancelQrLogin()
         } else if (browserVisible) {
             if (cursor.active) { cursor.active = false; browserDone.requestFocus() }
@@ -1179,13 +1318,22 @@ class MainActivity : Activity() {
     }
     override fun onResume() {
         super.onResume()
+        Diagnostics.record("app.resumed")
+        updateUiResumed = true
+        handler.post(presentUpdateResult)
         if (portalAvailable) portal.foreground(true)
         native?.resumeLifecycle()
     }
     override fun onPause() {
+        Diagnostics.record("app.paused")
+        updateUiResumed = false
         native?.pauseForLifecycle()
         if (portalAvailable) portal.foreground(false)
         super.onPause()
+    }
+    override fun onStop() {
+        diagnosticsView?.background()
+        super.onStop()
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("tab", tab)
@@ -1194,10 +1342,15 @@ class MainActivity : Activity() {
     }
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        Diagnostics.record("app.memory", "memoryLevel" to level)
         if (::posters.isInitialized) posters.trim()
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) detailCache.clear()
     }
     override fun onDestroy() {
+        Diagnostics.record("app.destroyed")
+        diagnosticsView?.dispose()
+        diagnosticsView = null
+        if (::updateChecker.isInitialized) updateChecker.destroy()
         closeQrLogin()
         activeDialog?.dismiss()
         native?.release()

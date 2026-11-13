@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "app.bahaplus.tv"
     compileSdk = 36
+    buildFeatures { buildConfig = true }
     defaultConfig {
         applicationId = "app.bahaplus.tv"
         minSdk = 24
@@ -37,6 +38,7 @@ kotlin {
 }
 
 dependencies {
+    implementation("androidx.core:core:1.13.0")
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.media3:media3-exoplayer:1.11.1")

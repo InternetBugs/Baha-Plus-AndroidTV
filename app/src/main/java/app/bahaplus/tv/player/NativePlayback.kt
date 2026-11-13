@@ -30,6 +30,7 @@ import app.bahaplus.tv.core.AnimeDetail
 import app.bahaplus.tv.core.NativeSource
 import app.bahaplus.tv.core.Preferences
 import app.bahaplus.tv.data.OfficialPortal
+import app.bahaplus.tv.diagnostics.Diagnostics
 import app.bahaplus.tv.ui.TvStyle
 import org.json.JSONObject
 import java.util.Locale
@@ -171,6 +172,7 @@ class NativePlayback(
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (released) return
+                Diagnostics.record("player.state", "state" to state)
                 if (state == Player.STATE_READY && !committed && !committing) commit()
                 status.visibility = if (state == Player.STATE_BUFFERING || !committed) View.VISIBLE else View.GONE
                 if (committed && state == Player.STATE_ENDED && !endedSent) {
@@ -179,6 +181,7 @@ class NativePlayback(
                 }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                Diagnostics.record("player.playing", "playing" to isPlaying)
                 view.keepScreenOn = isPlaying
                 playButton.setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
                 playButton.contentDescription = if (isPlaying) tr("暂停", "暫停") else tr("播放", "播放")
@@ -257,6 +260,7 @@ class NativePlayback(
         if (!committed || released) return
         val duration = player.duration.takeIf { it > 0 } ?: return
         player.seekTo((player.currentPosition + delta).coerceIn(0, duration))
+        Diagnostics.record("player.seek", "positionSeconds" to player.currentPosition / 1000)
         endedSent = false
         updateTimeline()
         clock()
@@ -335,6 +339,7 @@ class NativePlayback(
         val values = listOf(0) + source.variants.keys.sortedDescending()
         showChoice(tr("画质", "畫質"), values.map { if (it == 0) tr("自动", "自動") else "${it}p" }, values.indexOf(currentQuality)) { index ->
             currentQuality = values[index]
+            Diagnostics.record("player.quality", "quality" to currentQuality)
             preferences.quality = currentQuality
             val position = player.currentPosition
             val playing = player.playWhenReady
