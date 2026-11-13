@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URLDecoder
 import java.net.URLEncoder
 
 /** Per-operation cookies, fixed official origins, no redirects or global cookie handler. */
@@ -38,6 +39,23 @@ internal class OfficialHttpSession(
 
     fun post(path: String, fields: Map<String, String>): String =
         request(endpoint(path), encode(fields))
+
+    /** Display hint only; authorization must come from the authenticated HTTP page. */
+    fun accountName(owner: String): String? {
+        fun value(name: String): String? {
+            val values = cookies.header(URI("$WEB/")).split(';').map { it.trim() }
+                .filter { it.substringBefore('=') == name }
+            if (values.size != 1) return null
+            return runCatching {
+                // js.cookie uses decodeURIComponent: a literal '+' stays '+'.
+                URLDecoder.decode(values.single().substringAfter('=', "").replace("+", "%2B"), "UTF-8")
+            }.getOrNull()
+        }
+        if (value("BAHAID")?.equals(owner, true) != true) return null
+        return value("BAHANICK")?.let(InertHtml::decode)
+            ?.takeIf { it.none { c -> c.isISOControl() } }?.trim()
+            ?.takeIf { it.isNotEmpty() && it.length <= 200 }
+    }
 
     private fun request(uri: URI, body: String?): String {
         require(uri.scheme == "https" && uri.host in HOSTS && uri.port in setOf(-1, 443) &&

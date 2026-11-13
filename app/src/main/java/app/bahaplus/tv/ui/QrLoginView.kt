@@ -22,7 +22,6 @@ class QrLoginView(
     context: Context,
     private val preferences: Preferences,
     onRefresh: () -> Unit,
-    onWebLogin: () -> Unit,
     onCancel: () -> Unit
 ) : LinearLayout(context) {
     private val handler = Handler(Looper.getMainLooper())
@@ -65,8 +64,6 @@ class QrLoginView(
         }, LayoutParams(-1, -2).apply { topMargin = dp(16); bottomMargin = dp(16) })
         instructions.addView(status, LayoutParams(-1, dp(48)))
         instructions.addView(refresh, LayoutParams(-1, dp(44)))
-        instructions.addView(TvStyle.button(context, tr("使用账号密码登录", "使用帳號密碼登入"), onWebLogin),
-            LayoutParams(-1, dp(44)).apply { topMargin = dp(8) })
         instructions.addView(TvStyle.button(context, tr("返回", "返回"), onCancel),
             LayoutParams(-1, dp(44)).apply { topMargin = dp(8) })
         addView(instructions, LayoutParams(dp(380), -2))
@@ -107,7 +104,7 @@ class QrLoginView(
     fun error(expired: Boolean = false) {
         clearCode()
         status.text = if (expired) tr("二维码已过期，请刷新后重新扫描。", "QR Code 已過期，請更新後重新掃描。")
-        else tr("扫码登录未完成，请刷新或使用账号密码登录。", "掃碼登入未完成，請更新或使用帳號密碼登入。")
+        else tr("扫码登录未完成，请刷新二维码后重试。", "掃碼登入未完成，請更新 QR Code 後重試。")
     }
 
     fun dispose() { clearCode() }

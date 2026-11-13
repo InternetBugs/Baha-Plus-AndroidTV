@@ -19,14 +19,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-/** Login/logout only. Constructed on demand and destroyed when login UI closes. */
+/** Official QR authorization session. Destroyed when the native login UI closes. */
 class OfficialPortal(
     val webView: WebView,
     private val onEvent: (JSONObject) -> Unit,
-    private val onVisible: (Boolean, String) -> Unit,
     private val onRendererGone: () -> Unit
 ) {
-    enum class Purpose { LOGIN, QR_LOGIN }
     private val handler = Handler(Looper.getMainLooper())
     private val requests = mutableSetOf<String>()
     private var document = ""
@@ -36,9 +34,6 @@ class OfficialPortal(
     private var hasMessageListener = false
     private var qrRequest = ""
     @Volatile private var scriptCompatibility: OfficialScriptCompatibility? = null
-    var purpose = Purpose.QR_LOGIN
-        private set
-
     @SuppressLint("SetJavaScriptEnabled")
     fun initialize(onReady: () -> Unit) {
         var bootstrapping = true
@@ -105,15 +100,10 @@ class OfficialPortal(
                     return
                 }
                 if (url != view.url) return
-                if (!OfficialSite.trusted(url)) {
-                    if (purpose == Purpose.LOGIN) onVisible(true, "login")
-                    return
-                }
+                if (!OfficialSite.trusted(url)) { emit("navigation-error"); return }
                 ready = true
                 evaluate("window.__bahaDocumentNonce=${quote(document)};window.__bahaTVMessages=[];")
-                evaluate(script("tv-navigation"))
-                if (purpose == Purpose.QR_LOGIN) refreshQrLogin()
-                else run(script("login-session"))
+                refreshQrLogin()
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -149,24 +139,15 @@ class OfficialPortal(
         }
     }
 
-    fun login() {
-        cancelQrLogin()
-        purpose = Purpose.LOGIN
-        ready = false
-        onVisible(true, "login")
-        webView.loadUrl(OfficialSite.ACCOUNT)
-    }
-
     fun qrLogin() {
         if (destroyed) return
         cancelQrLogin()
-        purpose = Purpose.QR_LOGIN
         ready = false
         webView.loadUrl(OfficialSite.HOME)
     }
 
     fun refreshQrLogin() {
-        if (destroyed || purpose != Purpose.QR_LOGIN) return
+        if (destroyed) return
         if (!ready || !OfficialSite.trusted(webView.url.orEmpty())) { qrLogin(); return }
         cancelQrLogin()
         evaluate("window.__bahaMediaSuspended=${!foreground};")
@@ -174,7 +155,7 @@ class OfficialPortal(
     }
 
     fun completeQrLogin() {
-        if (destroyed || purpose != Purpose.QR_LOGIN) return
+        if (destroyed) return
         cancelQrLogin()
         CookieManager.getInstance().flush()
         emit("login-complete")
@@ -186,14 +167,6 @@ class OfficialPortal(
         evaluate("if(window.__bahaQrLogin)window.__bahaQrLogin.dispose();")
     }
 
-    fun finishLogin() {
-        if (destroyed) return
-        cancelQrLogin()
-        CookieManager.getInstance().flush()
-        emit("login-finished")
-    }
-
-    fun reload() { if (!destroyed) webView.reload() }
     fun logout(after: () -> Unit) = Companion.logout(after)
     fun foreground(active: Boolean) {
         foreground = active
@@ -206,7 +179,6 @@ class OfficialPortal(
     fun destroy() {
         if (destroyed) return
         cancelQrLogin()
-        evaluate("if(window.__bahaLoginSession)window.__bahaLoginSession.dispose();")
         destroyed = true
         handler.removeCallbacksAndMessages(null)
         scriptCompatibility?.close()
@@ -269,8 +241,7 @@ class OfficialPortal(
             val request = body.optString("requestId")
             if (body.optString("document") != document || request !in requests) return
             val type = body.optString("type")
-            if (type.startsWith("qr-login-") && (purpose != Purpose.QR_LOGIN || request != qrRequest)) return
-            if (type == "login-complete" && purpose != Purpose.LOGIN) return
+            if (type.startsWith("qr-login-") && request != qrRequest) return
             if (type in EVENTS) onEvent(body)
         }
     }
@@ -283,7 +254,7 @@ class OfficialPortal(
 
     companion object {
         private val EVENTS = setOf("qr-login-ready", "qr-login-retrying", "qr-login-expired",
-            "qr-login-error", "qr-login-complete", "login-complete", "operation-error")
+            "qr-login-error", "qr-login-complete", "operation-error")
         private fun quote(value: String) = JSONObject.quote(value)
         fun decodeString(raw: String): String? = runCatching { JSONArray("[$raw]").opt(0) as? String }.getOrNull()
         fun logout(after: () -> Unit) {

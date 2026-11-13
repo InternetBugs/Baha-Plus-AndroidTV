@@ -5,19 +5,44 @@ import app.bahaplus.tv.core.OfficialSite
 import app.bahaplus.tv.core.WatchEntry
 import org.json.JSONObject
 import java.net.URI
+import java.net.URLDecoder
 import kotlin.math.floor
+
+internal data class OfficialIdentity(val id: String, val name: String)
 
 internal data class OfficialAccount(val id: String, val name: String, val favorites: List<Anime>,
     val history: List<WatchEntry>)
 
 /** Inert HTML and official JSON over HTTP; never evaluates page scripts or onclick attributes. */
 internal class NativeAccountApi(private val session: OfficialHttpSession) {
-    fun account(): OfficialAccount? {
-        val first = try { page("/mygather.php") } catch (error: NativeApiException) {
-            if (error.code == "login-required") return null
-            throw error
-        }
+    /** Confirm the session before fetching optional collections/history. */
+    fun identity(): OfficialIdentity? {
+        val first = accountPage() ?: return null
         val profile = profile(first) ?: return null
+        session.checkCurrent()
+        return OfficialIdentity(profile.first, session.accountName(profile.first) ?: profile.second)
+    }
+
+    fun account(expectedOwner: String? = null): OfficialAccount? {
+        val first = accountPage() ?: return null
+        val profile = profile(first) ?: return null
+        if (expectedOwner != null && !profile.first.equals(expectedOwner, true)) {
+            throw NativeApiException("account-stale")
+        }
+        val favorites = favorites(first, profile.first)
+        val history = history()
+        requireProfile(page("/mygather.php"), profile.first)
+        session.checkCurrent()
+        return OfficialAccount(profile.first, session.accountName(profile.first) ?: profile.second,
+            favorites, history)
+    }
+
+    private fun accountPage(): InertHtml? =
+        try { page("/mygather.php") } catch (error: NativeApiException) {
+            if (error.code == "login-required") null else throw error
+        }
+
+    private fun favorites(first: InertHtml, owner: String): List<Anime> {
         val favorites = linkedMapOf<String, Anime>()
         val visited = mutableSetOf<String>()
         val pending = ArrayDeque(listOf("/mygather.php"))
@@ -26,7 +51,7 @@ internal class NativeAccountApi(private val session: OfficialHttpSession) {
             if (!visited.add(path)) continue
             require(visited.size <= 50)
             val doc = if (visited.size == 1) first else page(path)
-            requireProfile(doc, profile.first)
+            requireProfile(doc, owner)
             require(doc.selectFirst(".theme-title")?.text()?.contains("我的動畫") == true)
             for (item in parseFavorites(doc)) favorites[item.id] = item
             require(favorites.size <= 5000)
@@ -43,23 +68,16 @@ internal class NativeAccountApi(private val session: OfficialHttpSession) {
                 }
             }
         }
-        val history = history()
-        requireProfile(page("/mygather.php"), profile.first)
-        session.checkCurrent()
-        return OfficialAccount(profile.first, profile.second, favorites.values.toList(), history)
+        return favorites.values.toList()
     }
 
     fun favorite(anime: Anime, desired: Boolean, owner: String) {
         require(OfficialSite.validId(anime.id))
         requireProfile(page("/mygather.php"), owner)
-        val doc = InertHtml.parse(session.get("${OfficialHttpSession.WEB}/search.php",
-            mapOf("keyword" to anime.title)))
-        val button = doc.select("[onclick*=toggleGather]").firstOrNull {
-            gather.find(it.attr("onclick"))?.groupValues?.get(2) == anime.id
-        } ?: throw NativeApiException("favorite-unavailable")
+        val button = favoriteButton(anime)
         val arguments = requireNotNull(gather.find(button.attr("onclick"))).groupValues
-        val selectedClass = if (button.attr("onclick").contains("btn-is-active")) "btn-is-active" else "ordered"
-        if (button.hasClass(selectedClass) != desired) {
+        var confirmed = desired
+        if (favoriteSelected(button) != desired) {
             requireProfile(page("/mygather.php"), owner)
             val token = session.get("${OfficialHttpSession.WEB}/ajax/getCSRFToken.php").trim()
             require(token.isNotBlank() && token.length <= 500 && token.none { it in "<>\r\n" })
@@ -72,11 +90,36 @@ internal class NativeAccountApi(private val session: OfficialHttpSession) {
                 if (response.selectFirst("errmsg") != null || response.selectFirst("okmsg") == null) {
                     throw NativeApiException("favorite-rejected")
                 }
-            } else if (JSONObject(result).getInt("error") != 0) throw NativeApiException("favorite-rejected")
+            } else {
+                // The official removal handler only treats positive error codes
+                // as failures. Success need not contain an integer error=0.
+                // An absent/unknown acknowledgement is never enough on its own:
+                // confirm the desired state from a fresh authenticated response.
+                val error = runCatching { JSONObject(result).opt("error") }.getOrNull()
+                if (error != null && error != JSONObject.NULL && error != false) {
+                    val code = error.toString().toDoubleOrNull()
+                    if (code == null || !code.isFinite() || code > 0) {
+                        throw NativeApiException("favorite-rejected")
+                    }
+                }
+            }
+            confirmed = favoriteSelected(favoriteButton(anime))
         }
         requireProfile(page("/mygather.php"), owner)
         session.checkCurrent()
+        if (confirmed != desired) throw NativeApiException("favorite-rejected")
     }
+
+    private fun favoriteButton(anime: Anime): InertHtml {
+        val doc = InertHtml.parse(session.get("${OfficialHttpSession.WEB}/search.php",
+            mapOf("keyword" to anime.title)))
+        return doc.select("[onclick*=toggleGather]").firstOrNull {
+            gather.find(it.attr("onclick"))?.groupValues?.get(2) == anime.id
+        } ?: throw NativeApiException("favorite-unavailable")
+    }
+
+    private fun favoriteSelected(button: InertHtml): Boolean =
+        button.hasClass(if (button.attr("onclick").contains("btn-is-active")) "btn-is-active" else "ordered")
 
     private fun history(): List<WatchEntry> {
         val result = linkedMapOf<String, WatchEntry>()
@@ -106,15 +149,46 @@ internal class NativeAccountApi(private val session: OfficialHttpSession) {
 
     companion object {
         private val gather = Regex("toggleGather\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,")
+        private val accountId = Regex("[A-Za-z0-9_-]{1,64}")
+        private fun validOwner(id: String) = accountId.matches(id) && !id.equals("guest", true)
+
         internal fun profile(doc: InertHtml): Pair<String, String>? {
             val user = doc.selectFirst("a.user-info")
             val id = user?.selectFirst(".user-id")?.text()?.trim()
-            if (id.isNullOrBlank() || id.equals("guest", true)) {
-                if (doc.selectFirst("a[href*=user.gamer.com.tw/login.php]") != null) return null
-                throw NativeApiException("account-format")
+            val guest = doc.selectFirst("a[href*=user.gamer.com.tw/login.php]") != null
+            // The official user menu is built by JavaScript and is absent from
+            // HTTP responses. The authenticated collection page instead embeds
+            // its owner in its server-rendered history link.
+            val owners = doc.select("a[href]").mapNotNull { link ->
+                val uri = runCatching { URI(OfficialHttpSession.WEB + "/").resolve(link.attr("href")) }.getOrNull()
+                if (uri?.scheme != "https" || uri.host != "ani.gamer.com.tw" ||
+                    uri.port !in setOf(-1, 443) || uri.userInfo != null || uri.fragment != null ||
+                    uri.path != "/viewList.php") return@mapNotNull null
+                val values = uri.rawQuery.orEmpty().split('&').filter { it.substringBefore('=') == "u" }
+                if (values.size != 1) throw NativeApiException("account-format")
+                val owner = runCatching {
+                    URLDecoder.decode(values.single().substringAfter('=', "").replace("+", "%2B"), "UTF-8")
+                }.getOrNull()
+                if (owner == null || !validOwner(owner)) throw NativeApiException("account-format")
+                owner
+            }
+            if (owners.map { it.lowercase(java.util.Locale.ROOT) }.distinct().size > 1) {
+                throw NativeApiException("account-stale")
+            }
+            if (!id.isNullOrBlank() && !id.equals("guest", true)) {
+                if (!validOwner(id) || guest) throw NativeApiException("account-format")
+                if (owners.any { !it.equals(id, true) }) throw NativeApiException("account-stale")
+            } else {
+                if (guest && owners.isEmpty()) return null
+                val owner = owners.firstOrNull()
+                if (guest || owner == null ||
+                    doc.selectFirst(".theme-title")?.text()?.contains("我的動畫") != true) {
+                    throw NativeApiException("account-format")
+                }
+                return owner to owner
             }
             val name = user?.selectFirst(".user-name")?.text()?.trim().orEmpty().ifBlank { id }
-            require(id.matches(Regex("[A-Za-z0-9_-]{1,64}")) && name.length <= 200)
+            require(name.length <= 200)
             return id to name
         }
 

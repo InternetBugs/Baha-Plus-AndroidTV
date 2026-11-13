@@ -7,7 +7,6 @@ import java.net.URI
 object OfficialSite {
     const val HOME = "https://ani.gamer.com.tw/"
     const val ORIGIN = "https://ani.gamer.com.tw"
-    const val ACCOUNT = "${HOME}mygather.php"
     private val identifier = Regex("^[0-9]{1,10}$")
     fun validId(id: String) = identifier.matches(id)
     fun allowedNavigation(raw: String): Boolean = runCatching {

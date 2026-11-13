@@ -89,6 +89,93 @@ class NativeDataApiTest {
         }
     }
 
+    @Test fun serverRenderedOwnerConfirmsLoginWithoutTheJavascriptUserMenu() {
+        val requests = mutableListOf<String>()
+        val session = OfficialHttpSession(mapOf("ani.gamer.com.tw" to
+            "BAHAID=owner; BAHANICK=%E6%B8%AC%E8%A9%A6%20A+B%20%26amp%3B%20C"),
+            openConnection = { uri ->
+                requests += uri.path
+                assertEquals("/mygather.php", uri.path)
+                Response(uri, collectionPage("owner") +
+                    "<script>var fake = '<a class=\"user-info\">ignore</a>';</script>")
+            })
+        assertEquals(OfficialIdentity("owner", "測試 A+B & C"), NativeAccountApi(session).identity())
+        assertEquals(listOf("/mygather.php"), requests)
+    }
+
+    @Test fun collectionOwnerCannotComeFromGuestUntrustedOrAmbiguousLinks() {
+        for (link in listOf("https://evil.invalid/viewList.php?u=owner",
+            "http://ani.gamer.com.tw/viewList.php?u=owner",
+            "https://ani.gamer.com.tw:444/viewList.php?u=owner",
+            "https://user@ani.gamer.com.tw/viewList.php?u=owner",
+            "/viewList.php?u=owner#fragment", "/viewList.php?u=owner&u=other",
+            "/viewList.php?u=guest", "/viewList.php?u=bad%2Fowner")) {
+            assertThrows(NativeApiException::class.java) {
+                NativeAccountApi.profile(InertHtml.parse(
+                    "<h2 class='theme-title'>我的動畫</h2><a href='$link'>歷史</a>"))
+            }
+        }
+        assertThrows(NativeApiException::class.java) {
+            NativeAccountApi.profile(InertHtml.parse("<a href='/viewList.php?u=owner'>歷史</a>"))
+        }
+        assertThrows(NativeApiException::class.java) {
+            NativeAccountApi.profile(InertHtml.parse(collectionPage("owner") +
+                "<a href='https://user.gamer.com.tw/login.php'>登入</a>"))
+        }
+    }
+
+    @Test fun conflictingServerOwnersAndMenuIdentityFailClosed() {
+        for (html in listOf(collectionPage("owner") + "<a href='/viewList.php?u=other'>歷史</a>",
+            profile("other") + collectionPage("owner"))) {
+            assertEquals("account-stale", assertThrows(NativeApiException::class.java) {
+                NativeAccountApi.profile(InertHtml.parse(html))
+            }.code)
+        }
+        assertEquals("Owner", NativeAccountApi.profile(InertHtml.parse(collectionPage("Owner") +
+            "<a href='/viewList.php?u=owner'>歷史</a>"))?.first)
+    }
+
+    @Test fun nicknameCookiesAreOnlyHintsForTheServerVerifiedOwner() {
+        for (header in listOf("BAHAID=other; BAHANICK=wrong", "BAHANICK=wrong",
+            "BAHAID=owner; BAHANICK=%ZZ", "BAHAID=owner; BAHANICK=%0Awrong",
+            "BAHAID=owner; BAHANICK=${"x".repeat(201)}")) {
+            val session = OfficialHttpSession(mapOf("ani.gamer.com.tw" to header),
+                openConnection = { uri -> Response(uri, collectionPage("owner")) })
+            assertEquals(OfficialIdentity("owner", "owner"), NativeAccountApi(session).identity())
+        }
+        val guest = OfficialHttpSession(mapOf("ani.gamer.com.tw" to "BAHAID=owner; BAHANICK=hint"),
+            openConnection = { uri -> Response(uri,
+                "<a href='https://user.gamer.com.tw/login.php'>登入</a>") })
+        assertNull(NativeAccountApi(guest).identity())
+    }
+
+    @Test fun identityIsAvailableBeforeOptionalAccountDataCanFail() {
+        val requests = mutableListOf<String>()
+        val session = OfficialHttpSession(openConnection = { uri ->
+            requests += uri.path
+            Response(uri, if (uri.path.endsWith("history.php")) """{"error":{"code":500}}"""
+                else collectionPage("owner"))
+        })
+        val api = NativeAccountApi(session)
+        assertEquals(OfficialIdentity("owner", "owner"), api.identity())
+        assertEquals(listOf("/mygather.php"), requests)
+        assertEquals("official-rejected", assertThrows(NativeApiException::class.java) {
+            api.account("owner")
+        }.code)
+    }
+
+    @Test fun dataSyncRejectsAChangedOwnerBeforeFetchingCollectionsOrHistory() {
+        val paths = mutableListOf<String>()
+        val session = OfficialHttpSession(openConnection = { uri ->
+            paths += uri.path
+            Response(uri, collectionPage("other"))
+        })
+        assertEquals("account-stale", assertThrows(NativeApiException::class.java) {
+            NativeAccountApi(session).account("owner")
+        }.code)
+        assertEquals(listOf("/mygather.php"), paths)
+    }
+
     @Test fun accountPaginatesDeduplicatesAndSkipsWithdrawnHistory() {
         val requested = mutableListOf<URI>()
         val session = OfficialHttpSession(mapOf("ani.gamer.com.tw" to "session=private"),
@@ -123,13 +210,17 @@ class NativeDataApiTest {
 
     @Test fun favoriteUsesMatchingSeriesAndCsrfWithoutExecutingControls() {
         val requests = mutableListOf<Response>()
+        var selected = false
         val session = OfficialHttpSession(openConnection = { uri ->
             Response(uri, when (uri.path) {
                 "/mygather.php" -> profile("owner")
                 "/search.php" -> "<button onclick=\"toggleGather(99, 2, this)\"></button>" +
-                    "<button onclick=\"toggleGather(10, 1, this)\"></button>"
+                    control("1", selected)
                 "/ajax/getCSRFToken.php" -> "csrf-value"
-                "/ajax/want2play.php" -> "<root><okmsg>ok</okmsg></root>"
+                "/ajax/want2play.php" -> {
+                    selected = true
+                    "<root><okmsg>ok</okmsg></root>"
+                }
                 else -> error("unexpected endpoint")
             }).also { requests += it }
         })
@@ -138,6 +229,125 @@ class NativeDataApiTest {
         val post = requests.single { it.uri.path == "/ajax/want2play.php" }
         assertEquals("POST", post.requestMethod)
         assertEquals("s=10&animeSn=1&token=csrf-value", post.output.toString("UTF-8"))
+        assertEquals(2, requests.count { it.uri.path == "/search.php" })
+    }
+
+    @Test fun removalConfirmsServerStateWithoutRequiringAnIntegerZeroAcknowledgement() {
+        for (ack in listOf("""{"error":0}""", """{"error":"0"}""", """{"error":-1}""",
+            """{"error":null}""", """{"error":false}""", """{"msg":"ok"}""", "true", "")) {
+            for (modern in listOf(false, true)) {
+                var selected = true
+                var posts = 0
+                var reads = 0
+                val session = OfficialHttpSession(openConnection = { uri ->
+                    Response(uri, when (uri.path) {
+                        "/mygather.php" -> collectionPage("owner")
+                        "/search.php" -> {
+                            reads++
+                            control("1", selected, modern)
+                        }
+                        "/ajax/getCSRFToken.php" -> "csrf-value"
+                        "/ajax/delgather.php" -> {
+                            posts++
+                            selected = false
+                            ack
+                        }
+                        else -> error("unexpected endpoint")
+                    })
+                })
+                NativeAccountApi(session).favorite(testAnime(), false, "owner")
+                assertFalse(selected)
+                assertEquals(1, posts)
+                assertEquals(2, reads)
+            }
+        }
+    }
+
+    @Test fun missingOrSuccessfulAcknowledgementCannotHideAnUnchangedFavorite() {
+        for (ack in listOf("""{"error":0}""", """{"error":null}""", "{}", "changed-format", "")) {
+            val session = OfficialHttpSession(openConnection = { uri ->
+                Response(uri, when (uri.path) {
+                    "/mygather.php" -> collectionPage("owner")
+                    "/search.php" -> control("1", true)
+                    "/ajax/getCSRFToken.php" -> "csrf-value"
+                    "/ajax/delgather.php" -> ack
+                    else -> error("unexpected endpoint")
+                })
+            })
+            assertEquals("favorite-rejected", assertThrows(NativeApiException::class.java) {
+                NativeAccountApi(session).favorite(testAnime(), false, "owner")
+            }.code)
+        }
+    }
+
+    @Test fun positiveAndInvalidRemovalErrorsRemainFailures() {
+        for (ack in listOf("""{"error":1}""", """{"error":"2"}""", """{"error":true}""",
+            """{"error":"invalid"}""", """{"error":{"code":1}}""")) {
+            var searchReads = 0
+            val session = OfficialHttpSession(openConnection = { uri ->
+                Response(uri, when (uri.path) {
+                    "/mygather.php" -> collectionPage("owner")
+                    "/search.php" -> control("1", ++searchReads == 1)
+                    "/ajax/getCSRFToken.php" -> "csrf-value"
+                    "/ajax/delgather.php" -> ack
+                    else -> error("unexpected endpoint")
+                })
+            })
+            assertEquals("favorite-rejected", assertThrows(NativeApiException::class.java) {
+                NativeAccountApi(session).favorite(testAnime(), false, "owner")
+            }.code)
+            assertEquals(1, searchReads)
+        }
+    }
+
+    @Test fun addAcknowledgementAlsoRequiresTheActualServerStateToChange() {
+        val session = OfficialHttpSession(openConnection = { uri ->
+            Response(uri, when (uri.path) {
+                "/mygather.php" -> collectionPage("owner")
+                "/search.php" -> control("1", false)
+                "/ajax/getCSRFToken.php" -> "csrf-value"
+                "/ajax/want2play.php" -> "<root><okMsg>ok</okMsg></root>"
+                else -> error("unexpected endpoint")
+            })
+        })
+        assertEquals("favorite-rejected", assertThrows(NativeApiException::class.java) {
+            NativeAccountApi(session).favorite(testAnime(), true, "owner")
+        }.code)
+    }
+
+    @Test fun alreadyDesiredFavoriteStateDoesNotSendAnotherMutation() {
+        for (selected in listOf(false, true)) {
+            val paths = mutableListOf<String>()
+            val session = OfficialHttpSession(openConnection = { uri ->
+                paths += uri.path
+                Response(uri, when (uri.path) {
+                    "/mygather.php" -> collectionPage("owner")
+                    "/search.php" -> control("1", selected)
+                    else -> error("unexpected mutation")
+                })
+            })
+            NativeAccountApi(session).favorite(testAnime(), selected, "owner")
+            assertEquals(listOf("/mygather.php", "/search.php", "/mygather.php"), paths)
+        }
+    }
+
+    @Test fun ownerChangeAfterMutationCannotConfirmAnotherAccountsFavoriteState() {
+        var selected = true
+        val session = OfficialHttpSession(openConnection = { uri ->
+            Response(uri, when (uri.path) {
+                "/mygather.php" -> collectionPage(if (selected) "owner" else "other")
+                "/search.php" -> control("1", selected)
+                "/ajax/getCSRFToken.php" -> "csrf-value"
+                "/ajax/delgather.php" -> {
+                    selected = false
+                    "{}"
+                }
+                else -> error("unexpected endpoint")
+            })
+        })
+        assertEquals("account-stale", assertThrows(NativeApiException::class.java) {
+            NativeAccountApi(session).favorite(testAnime(), false, "owner")
+        }.code)
     }
 
     @Test fun staleOrDifferentOwnerCannotSendFavoriteMutation() {
@@ -212,6 +422,14 @@ class NativeDataApiTest {
 
     private fun profile(id: String) = "<a class='user-info'><span class='user-id'>$id</span>" +
         "<b class='user-name'>名字</b></a>"
+    private fun collectionPage(id: String) = "<h2 class='theme-title'>我的動畫</h2>" +
+        "<a href='viewList.php?u=$id'>觀看紀錄</a>"
+    private fun testAnime() = NativeAccountApi.parseFavorites(InertHtml.parse(card("1"))).single()
+    private fun control(id: String, selected: Boolean, modern: Boolean = false): String {
+        val active = if (modern) "btn-is-active" else "ordered"
+        return "<button class='${if (selected) active else ""}' " +
+            "onclick=\"toggleGather(10, $id, this${if (modern) ", 'btn-is-active'" else ""})\"></button>"
+    }
     private fun card(id: String) = "<a class='theme-list-main' href='/animeRef.php?sn=$id'>" +
         "<div class='theme-name'>動畫$id</div><img class='theme-img' src='https://p2.bahamut.com.tw/$id.jpg'>" +
         "<button onclick='toggleGather(10, $id, this)'></button></a>"

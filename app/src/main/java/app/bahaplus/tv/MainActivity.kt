@@ -8,7 +8,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -43,7 +42,6 @@ import app.bahaplus.tv.player.NativePlayback
 import app.bahaplus.tv.ui.CatalogAdapter
 import app.bahaplus.tv.ui.CatalogRow
 import app.bahaplus.tv.ui.DiagnosticsView
-import app.bahaplus.tv.ui.RemoteCursor
 import app.bahaplus.tv.ui.QrLoginView
 import app.bahaplus.tv.ui.TvStyle
 import app.bahaplus.tv.ui.TvGridLayoutManager
@@ -62,18 +60,10 @@ class MainActivity : Activity() {
     private lateinit var accountLabel: TextView
     private lateinit var notice: TextView
     private lateinit var playerLayer: FrameLayout
-    private lateinit var browserPane: LinearLayout
-    private lateinit var browserBar: LinearLayout
-    private lateinit var browserTitle: TextView
-    private lateinit var browserDone: TextView
-    private lateinit var browserCursor: TextView
-    private var browserInstance: WebView? = null
-    private val browser: WebView get() = checkNotNull(browserInstance)
-    private lateinit var cursor: RemoteCursor
+    private var loginWebView: WebView? = null
     private var portalInstance: OfficialPortal? = null
     private val portal: OfficialPortal get() = checkNotNull(portalInstance)
     private var portalAvailable = false
-    private var browserVisible = false
     private var loginOpening = false
     private val navigation = linkedMapOf<String, TextView>()
     private var tab = "home"
@@ -210,44 +200,24 @@ class MainActivity : Activity() {
         if (portalAvailable) { ready(); return }
         runCatching {
             if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
-            browserInstance = WebView(this)
-            cursor = RemoteCursor(this)
-            browserPane = TvStyle.vertical(this).apply { setBackgroundColor(Color.BLACK) }
-            browserBar = TvStyle.horizontal(this).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(16), dp(8), dp(16), dp(8))
-                setBackgroundColor(TvStyle.rail)
+            val webView = WebView(this).apply {
+                alpha = .01f
+                isFocusable = false
+                isFocusableInTouchMode = false
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             }
-            browserTitle = TvStyle.label(this, "", 16f).apply { maxLines = 2 }
-            browserBar.addView(browserTitle, LinearLayout.LayoutParams(0, -2, 1f))
-            browserDone = TvStyle.button(this, tr("完成登录", "完成登入")) { portal.finishLogin() }
-            browserBar.addView(browserDone)
-            browserBar.addView(TvStyle.button(this, tr("刷新", "重新整理")) { portal.reload() })
-            browserCursor = TvStyle.button(this, tr("遥控光标", "遙控游標")) {
-                cursor.active = !cursor.active
-                if (cursor.active) browser.requestFocus()
-            }
-            browserBar.addView(browserCursor)
-            browserPane.addView(browserBar)
-            val surface = FrameLayout(this)
-            surface.addView(browser, FrameLayout.LayoutParams(-1, -1))
-            surface.addView(cursor, FrameLayout.LayoutParams(-1, -1))
-            browserPane.addView(surface, LinearLayout.LayoutParams(-1, 0, 1f))
-            root.addView(browserPane, FrameLayout.LayoutParams(1, 1))
-            portalInstance = OfficialPortal(browser, ::onOfficialEvent, ::showBrowser, ::onRendererGone)
+            loginWebView = webView
+            root.addView(webView, FrameLayout.LayoutParams(1, 1))
+            portalInstance = OfficialPortal(webView, ::onOfficialEvent, ::onRendererGone)
             portalAvailable = true
-            showBrowser(false, "")
             portal.initialize(ready)
         }.onFailure {
             loginOpening = false
             portalAvailable = false
-            if (::browserPane.isInitialized) {
-                root.removeView(browserPane)
-                browserPane.removeAllViews()
-            }
             val failedPortal = portalInstance
-            val failedBrowser = browserInstance
-            browserInstance = null
+            val failedBrowser = loginWebView
+            failedBrowser?.let { root.removeView(it) }
+            loginWebView = null
             portalInstance = null
             runCatching { if (failedPortal != null) failedPortal.destroy() else failedBrowser?.destroy() }
             closeQrLogin()
@@ -260,13 +230,10 @@ class MainActivity : Activity() {
         loginOpening = false
         if (!portalAvailable) return
         portalAvailable = false
-        browserVisible = false
-        cursor.active = false
-        root.removeView(browserPane)
-        browserPane.removeAllViews()
+        loginWebView?.let { root.removeView(it) }
         val previous = portalInstance
         portalInstance = null
-        browserInstance = null
+        loginWebView = null
         previous?.destroy()
     }
 
@@ -283,7 +250,7 @@ class MainActivity : Activity() {
         if ((key == "history" || key == "favorites") && accountId != null) syncAccount()
     }
     private fun render(restoreFocus: Boolean = true) {
-        if (!::content.isInitialized || native != null || playingVideo.isNotEmpty() || browserVisible ||
+        if (!::content.isInitialized || native != null || playingVideo.isNotEmpty() ||
             qrLoginView != null || diagnosticsView != null) return
         val restoreContentFocus = restoreFocus && content.hasFocus()
         shell.visibility = View.VISIBLE
@@ -668,6 +635,7 @@ class MainActivity : Activity() {
         val anime = selectedAnime?.takeIf { it.id == id } ?: return
         val owner = accountId ?: return
         val desired = favorites.none { it.id == id }
+        accountLoader.cancel()
         favoritePending = true
         favoriteLoader.load(accountSession(), { NativeAccountApi(it).favorite(anime, desired, owner) }) { result ->
             favoritePending = false
@@ -773,46 +741,13 @@ class MainActivity : Activity() {
         playingDetail = null
         playbackErrorVisible = false
         detailsOpen = true
-        val wasBrowserVisible = browserVisible
-        showBrowser(false, "")
-        if (!wasBrowserVisible) {
-            render()
-            focusContent()
-        }
+        render()
+        focusContent()
         syncAccount()
     }
 
-    private fun showBrowser(visible: Boolean, reason: String) {
-        if (visible && diagnosticsView != null) return
-        if (!portalAvailable || !::browserPane.isInitialized) return
-        val wasVisible = browserVisible
-        browserVisible = visible
-        cursor.active = false
-        browserPane.layoutParams = FrameLayout.LayoutParams(if (visible) -1 else 1, if (visible) -1 else 1)
-        browserPane.alpha = if (visible) 1f else .01f
-        browserBar.visibility = if (visible) View.VISIBLE else View.GONE
-        browser.isFocusable = visible
-        browser.isFocusableInTouchMode = visible
-        browserPane.importantForAccessibility = if (visible) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-        if (visible) {
-            closeQrLogin()
-            browserPane.bringToFront()
-            browserDone.text = tr("完成登录 / 验证", "完成登入 / 驗證")
-            browserTitle.text = when (reason) {
-                "login" -> tr("登录巴哈姆特账号", "登入巴哈姆特帳號")
-                else -> tr("请完成官方页面中的验证", "請完成官方頁面中的驗證")
-            }
-            browserDone.requestFocus()
-        } else {
-            if (wasVisible && native == null && playingVideo.isEmpty()) {
-                render()
-                if (detailsOpen) focusContent() else navigation[tab]?.requestFocus()
-            } else native?.showControls()
-            handler.post(presentUpdateResult)
-        }
-    }
     private fun login() {
-        if (loginOpening || qrLoginView != null || browserVisible) return
+        if (loginOpening || qrLoginView != null) return
         loginOpening = true
         Diagnostics.record("account.login")
         retireAccountRequests()
@@ -821,7 +756,6 @@ class MainActivity : Activity() {
             loginOpening = false
             qrLoginView = QrLoginView(this, preferences,
                 onRefresh = { portal.refreshQrLogin() },
-                onWebLogin = { closeQrLogin(); portal.login() },
                 onCancel = ::cancelQrLogin)
             root.addView(qrLoginView, FrameLayout.LayoutParams(-1, -1))
             portal.qrLogin()
@@ -835,7 +769,10 @@ class MainActivity : Activity() {
     }
     private fun cancelQrLogin() {
         closeQrLogin()
-        if (portalAvailable) portal.finishLogin()
+        releasePortal()
+        syncAccount()
+        render()
+        if (detailsOpen) focusContent() else navigation[tab]?.requestFocus()
     }
     private fun accountAction() {
         if (accountId == null) login()
@@ -883,6 +820,7 @@ class MainActivity : Activity() {
     }
 
     private fun syncAccount(afterLogin: Boolean = false) {
+        if (favoritePending) return
         val cookies = OfficialHttpSession.snapshotCookies()
         if (cookies.values.all { it.isBlank() }) {
             accountLoader.cancel()
@@ -890,7 +828,40 @@ class MainActivity : Activity() {
             if (afterLogin) qrLoginView?.error() else render()
             return
         }
-        accountLoader.load(accountSession(cookies), { NativeAccountApi(it).account() }) { result ->
+        accountLoader.load(accountSession(cookies), { NativeAccountApi(it).identity() }) { result ->
+            result.onSuccess { identity ->
+                if (identity == null) clearAccount()
+                else {
+                    if (!identity.id.equals(accountId, true)) {
+                        retireAccountRequests()
+                        clearAccount()
+                    }
+                    accountId = identity.id
+                    accountName = identity.name
+                    updateAccount()
+                }
+                if (afterLogin) {
+                    if (identity == null) {
+                        qrLoginView?.error()
+                        return@onSuccess
+                    }
+                    closeQrLogin()
+                    releasePortal()
+                }
+                if (afterLogin || detailsOpen || tab in setOf("home", "favorites", "history", "settings")) render()
+                if (afterLogin) {
+                    if (detailsOpen) focusContent() else navigation[tab]?.requestFocus()
+                }
+                if (identity != null) syncAccountData(identity.id)
+            }.onFailure {
+                if (afterLogin) qrLoginView?.error()
+                nativeRequestError(it)
+            }
+        }
+    }
+
+    private fun syncAccountData(owner: String) {
+        accountLoader.load(accountSession(), { NativeAccountApi(it).account(owner) }) { result ->
             result.onSuccess { account ->
                 if (account == null) clearAccount()
                 else {
@@ -901,18 +872,12 @@ class MainActivity : Activity() {
                     accountSynced = true
                     updateAccount()
                 }
-                if (afterLogin) {
-                    if (account == null) {
-                        qrLoginView?.error()
-                        return@onSuccess
-                    }
-                    closeQrLogin()
-                    releasePortal()
-                }
-                if (detailsOpen || tab in setOf("home", "favorites", "history")) render()
+                if (detailsOpen || tab in setOf("home", "favorites", "history", "settings")) render()
             }.onFailure {
-                if (afterLogin) qrLoginView?.error()
                 nativeRequestError(it)
+                if (accountId != null) showNotice(tr(
+                    "已登录，追番或观看历史同步未完成，请稍后刷新重试。",
+                    "已登入，追番或觀看紀錄同步未完成，請稍後重新整理重試。"))
             }
         }
     }
@@ -955,13 +920,6 @@ class MainActivity : Activity() {
             "login-complete" -> {
                 android.webkit.CookieManager.getInstance().flush()
                 syncAccount(afterLogin = true)
-            }
-            "login-finished" -> {
-                closeQrLogin()
-                showBrowser(false, "")
-                releasePortal()
-                syncAccount()
-                render()
             }
             "operation-error", "navigation-error", "verification-required" -> qrLoginView?.error()
         }
@@ -1074,7 +1032,7 @@ class MainActivity : Activity() {
         activeDialog = AlertDialog.Builder(this).setTitle(title).setView(scroll).setPositiveButton(tr("返回", "返回"), null).show()
     }
     private fun showNotice(text: String) {
-        if (::notice.isInitialized && !browserVisible && playingVideo.isEmpty()) {
+        if (::notice.isInitialized && playingVideo.isEmpty()) {
             notice.text = text
             notice.setTextColor(TvStyle.warning)
         }
@@ -1099,7 +1057,7 @@ class MainActivity : Activity() {
 
     private fun showPendingUpdateResult() {
         if (pendingUpdateResult == null || !updateUiResumed || !hasWindowFocus() || isFinishing || isDestroyed ||
-            browserVisible || qrLoginView != null || diagnosticsView != null ||
+            loginOpening || qrLoginView != null || diagnosticsView != null ||
             playingVideo.isNotEmpty() || activeDialog?.isShowing == true) return
         val result = pendingUpdateResult
         pendingUpdateResult = null
@@ -1144,13 +1102,7 @@ class MainActivity : Activity() {
         if (hasFocus) handler.post(presentUpdateResult)
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (browserVisible && ::cursor.isInitialized && cursor.active) {
-            if (cursor.key(event, browser)) {
-                if (!cursor.active) browserDone.requestFocus()
-                return true
-            }
-        }
-        if (!browserVisible && native?.handle(event) == true) return true
+        if (native?.handle(event) == true) return true
         if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
             back()
             return true
@@ -1165,11 +1117,8 @@ class MainActivity : Activity() {
     private fun back() {
         if (diagnosticsView != null) {
             closeDiagnostics()
-        } else if (qrLoginView != null) {
+        } else if (qrLoginView != null || loginOpening) {
             cancelQrLogin()
-        } else if (browserVisible) {
-            if (cursor.active) { cursor.active = false; browserDone.requestFocus() }
-            else if (playingVideo.isNotEmpty()) exitPlayback() else portal.finishLogin()
         } else if (playingVideo.isNotEmpty()) {
             if (native?.handleBack() != true) exitPlayback()
         }
