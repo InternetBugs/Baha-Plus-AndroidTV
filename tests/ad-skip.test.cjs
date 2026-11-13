@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../app/src/main/assets/adapters/ad-skip.js'), 'utf8');
+const source = readFileSync(join(process.env.BAHA_ADAPTERS_DIR || join(__dirname, '../app/src/main/js/adapters'), 'ad-skip.js'), 'utf8');
 
 function page(origin = 'https://ani.gamer.com.tw') {
   let clicks = 0, current = true;

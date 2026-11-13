@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
+import android.webkit.ConsoleMessage
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
@@ -17,7 +18,9 @@ import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import app.bahaplus.tv.core.OfficialSite
+import app.bahaplus.tv.core.OfficialScriptPolicy
 import app.bahaplus.tv.core.Preferences
+import app.bahaplus.tv.core.WebViewCompatibility
 import app.bahaplus.tv.diagnostics.Diagnostics
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,6 +48,7 @@ class OfficialPortal(
     private var foreground = true
     private var hasMessageListener = false
     private var waitingHome: (() -> Unit)? = null
+    @Volatile private var scriptCompatibility: OfficialScriptCompatibility? = null
     private var qrRequest = ""
     private var qrAuthorized = false
     var purpose = Purpose.HOME
@@ -90,6 +94,14 @@ class OfficialPortal(
             hasMessageListener = true
         }
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                if (purpose == Purpose.PLAY &&
+                    message.messageLevel() == ConsoleMessage.MessageLevel.ERROR &&
+                    WebViewCompatibility.officialPlayerSyntaxError(message.message(), message.sourceId())) {
+                    emit("webview-script-incompatible")
+                }
+                return false
+            }
             override fun onPermissionRequest(request: PermissionRequest) {
                 if (request.origin.toString().trimEnd('/') == OfficialSite.ORIGIN &&
                     OfficialSite.trusted(webView.url.orEmpty()) &&
@@ -100,6 +112,9 @@ class OfficialPortal(
             override fun onCreateWindow(view: WebView?, dialog: Boolean, gesture: Boolean, result: android.os.Message?) = false
         }
         webView.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
+                scriptCompatibility?.intercept(request)
+
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 // Official verification and advertising can embed third-party
                 // frames. They never gain access to our main-frame bridge.
@@ -168,13 +183,31 @@ class OfficialPortal(
             }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 destroyed = true
+                scriptCompatibility?.close()
                 handler.removeCallbacksAndMessages(null)
                 requests.clear()
                 onRendererGone()
                 return true
             }
         }
-        home()
+        // Probe the actual engine before loading any official document. A modern
+        // provider takes the unchanged loader path and never creates a compiler.
+        val major = OfficialScriptPolicy.major(
+            WebViewCompat.getCurrentWebViewPackage(webView.context)?.versionName)
+        webView.evaluateJavascript("""
+            (function(){try {
+              new Function('class A { #f() { return 1; } get #v() { return this.#f(); } read() { return this.#v; } } var a; a ??= 1; a &&= 2; a ||= 3;');
+              return true;
+            } catch(e) { return false; }})()
+        """.trimIndent()) { supported ->
+            if (destroyed) return@evaluateJavascript
+            if (OfficialScriptPolicy.needsTranslation(supported == "true")) {
+                scriptCompatibility = OfficialScriptCompatibility(webView.context.applicationContext,
+                    major.takeIf { it > 0 } ?: 74)
+            }
+            Diagnostics.record("web.script-compat", "phase" to if (scriptCompatibility == null) "direct" else "enabled")
+            home()
+        }
     }
 
     private fun schedulePoll() {
@@ -275,7 +308,7 @@ class OfficialPortal(
             requests.remove(qrRequest)
             completed.remove(qrRequest)
             qrRequest = ""
-            evaluate("window.__bahaQrLogin?.dispose();")
+            evaluate("if(window.__bahaQrLogin)window.__bahaQrLogin.dispose();")
         }
         qrAuthorized = false
     }
@@ -327,7 +360,8 @@ class OfficialPortal(
         run("""
             (async function(){
               try {
-                const value=await window.__bahaPlayerBridge?.prepareNative();
+                const bridge=window.__bahaPlayerBridge;
+                const value=bridge?await bridge.prepareNative():null;
                 bahaPostJSON(JSON.stringify({type:'native-source',id:${quote(animeId)},videoId:${quote(videoId)},
                   source:value?{...value,userAgent:navigator.userAgent}:null}));
               } catch(e) { bahaPostJSON(JSON.stringify({type:'native-source',source:null})); }
@@ -343,13 +377,13 @@ class OfficialPortal(
             return
         }
         val expected = document
-        evaluate("window.__bahaPlayerBridge?.$action(${quote(expected)})===true") {
+        evaluate("!!window.__bahaPlayerBridge&&window.__bahaPlayerBridge.$action(${quote(expected)})===true") {
             callback(expected == document && it == "true")
         }
     }
     fun commitNative(callback: (JSONObject?) -> Unit) {
         val expected = document
-        evaluate("JSON.stringify(window.__bahaPlayerBridge?.commitNative()||null)") { raw ->
+        evaluate("JSON.stringify(window.__bahaPlayerBridge&&window.__bahaPlayerBridge.commitNative()||null)") { raw ->
             val result = if (expected == document) decodeString(raw) else null
             val body = result?.let { runCatching { JSONObject(it) }.getOrNull() }
             nativeActive = body != null
@@ -362,7 +396,7 @@ class OfficialPortal(
         val code = """
             (function(){
               if(window.__bahaDocumentNonce!==${quote(expected)})return false;
-              return window.__bahaPlayerBridge?.nativeStatus()==='ok' &&
+              return !!window.__bahaPlayerBridge && window.__bahaPlayerBridge.nativeStatus()==='ok' &&
                 window.__bahaPlayerBridge.syncNative($value)===true;
             })()
         """.trimIndent()
@@ -376,7 +410,7 @@ class OfficialPortal(
             after()
         }
     }
-    fun failNative() { evaluate("window.__bahaPlayerBridge?.failNative();") }
+    fun failNative() { evaluate("if(window.__bahaPlayerBridge)window.__bahaPlayerBridge.failNative();") }
     fun reload() {
         if (destroyed) return
         if (purpose == Purpose.PLAY) onVisible(true, "play")
@@ -396,8 +430,8 @@ class OfficialPortal(
         foreground = active
         if (destroyed) return
         if (active) webView.onResume() else webView.onPause()
-        evaluate("window.__bahaMediaSuspended=${!active};window.__bahaPlayerBridge?.${if (active) "resume" else "suspend"}();")
-        if (purpose == Purpose.QR_LOGIN) evaluate("window.__bahaQrLogin?.${if (active) "resume" else "pause"}();")
+        evaluate("window.__bahaMediaSuspended=${!active};if(window.__bahaPlayerBridge)window.__bahaPlayerBridge.${if (active) "resume" else "suspend"}();")
+        if (purpose == Purpose.QR_LOGIN) evaluate("if(window.__bahaQrLogin)window.__bahaQrLogin.${if (active) "resume" else "pause"}();")
         schedulePoll()
     }
     fun destroy() {
@@ -406,6 +440,7 @@ class OfficialPortal(
             return
         }
         destroyed = true
+        scriptCompatibility?.close()
         handler.removeCallbacksAndMessages(null)
         requests.clear()
         webView.stopLoading()
@@ -424,7 +459,7 @@ class OfficialPortal(
               function bahaPostJSON(raw){
                 if(location.origin!=='https://ani.gamer.com.tw'||window.__bahaDocumentNonce!==ticket)return;
                 const body=JSON.parse(raw);body.document=ticket;body.requestId=requestId;
-                if(window.baha?.postMessage)window.baha.postMessage(JSON.stringify(body));
+                if(window.baha&&window.baha.postMessage)window.baha.postMessage(JSON.stringify(body));
                 else {const queue=window.__bahaTVMessages||(window.__bahaTVMessages=[]);if(queue.length<128)queue.push(body);}
               }
               if(document.querySelector('#challenge-form,#challenge-running,#cf-challenge-running')||

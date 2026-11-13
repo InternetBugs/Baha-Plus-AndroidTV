@@ -15,7 +15,7 @@
 - 2026-11-13，酥鱼在交互模拟器中测试后反馈“账号功能完全正常”；这是用户对本次账号功能的验收反馈，详细范围见 [扫码登录记录](docs/qr-login.md)。
 - 目标电视尚未连接；登录、官方验证、硬件解码、进度同步和整集播放均未通过真机验收。不能据此声称已能稳定播放。
 
-当前版本：[0.3.0 下载](https://github.com/InternetBugs/Baha-Plus-AndroidTV/releases/tag/v0.3.0)，APK 内应用版本为 `0.3.0`／versionCode 3。GitHub Actions 完成测试、Lint、Release 构建与固定密钥签名，Release 附带 APK 与 SHA-256 校验文件。更新内容见 [0.3.0 发布说明](docs/release-notes-0.3.0.md)。
+当前版本：[0.3.1 下载](https://github.com/InternetBugs/Baha-Plus-AndroidTV/releases/tag/v0.3.1)，APK 内应用版本为 `0.3.1`／versionCode 4。GitHub Actions 完成测试、Lint、Release 构建与固定密钥签名，Release 附带 APK 与 SHA-256 校验文件。更新内容见 [0.3.1 发布说明](docs/release-notes-0.3.1.md)。
 
 早期 `v0.1.0`／`v0.1.0-qr.1` 测试包使用调试签名，升级至本版需先卸载旧应用再安装；卸载会清除本地登录会话和设置，安装后需重新扫码登录。后续正式签名版本使用相同密钥。
 
@@ -109,8 +109,11 @@ Windows PowerShell：
 也可以使用标准 Wrapper：
 
 ```powershell
+npm ci --ignore-scripts
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug
 ```
+
+构建需要 Node.js 18+。适配器源码位于 `app/src/main/js/adapters/`；Gradle 使用锁定版本的 esbuild 按 Chrome／WebView 74 编译，并检查生成脚本的 ECMAScript 2019 语法，再打包到 APK 的 `assets/adapters/`。首次运行 `tools/Build.ps1` 前也需安装上述 npm 构建依赖；安装后可离线编译。生成文件位于 `app/build/generated/webviewAssets/`，不需要手工修改或提交。DOM API 兼容性及官网流程仍需在实际 WebView 上测试。
 
 当前依赖没有配置仅限 64 位的 ABI 过滤；打包时应检查 APK 中任何新增原生库是否同时提供 `armeabi-v7a`。首要目标设备是 32 位运行环境。
 
@@ -119,9 +122,14 @@ Windows PowerShell：
 需要 Node.js 18+ 与 Python 3：
 
 ```powershell
-node --test tests/*.test.cjs
+npm ci --ignore-scripts
+npm test
 python tools/check-project.py
 ```
+
+`npm test` 分别运行源码与 WebView 74 编译产物的同一套适配器回归测试。
+
+官网播放脚本另有按需语法兼容层：检测实际内核是否支持官网所需的私有方法、访问器与逻辑赋值；支持时直接加载，不创建编译器。检测失败时，在客户端转换官方来源的外部静态 JavaScript，并按源码内容缓存结果；不维护单个脚本文件名单。首次编译会增加 CPU 与内存开销，不能替代 DOM、解码或 DRM 兼容性验证。实现范围见 [WebView 语法兼容层](docs/webview-compatibility.md)。
 
 JVM 测试位于 `app/src/test`，覆盖 URL 来源、原生播放清单、进度边界与扫码授权链接；只有 Android 构建任务成功执行后才能报告其结果。
 

@@ -26,7 +26,7 @@
       const saved = window.__bahaPlaybackCheckpoint;
       const restoring = saved?.videoId === new URL(location.href).searchParams.get('sn') &&
         typeof saved.paused === 'boolean';
-      held ??= {position: c.media.currentTime, duration: c.media.duration,
+      if (held === null) held = {position: c.media.currentTime, duration: c.media.duration,
         paused: restoring ? saved.paused : c.media.paused,
         muted: c.media.muted, rate: c.media.playbackRate};
       if (heldMedia !== c.media) {
@@ -106,7 +106,7 @@
       replace('readyState', () => 4);
       active = true;
       const layer = c.root?.querySelector('.vjs-danmu');
-      if (layer) { layer.replaceChildren(); layer.style.display = 'none'; }
+      if (layer) { layer.textContent = ''; layer.style.display = 'none'; }
       // Drop the rest of the visual document after its metadata has been
       // projected. Keep official globals/player callbacks for account policy.
       document.querySelectorAll('iframe').forEach(node => node.remove());
@@ -121,7 +121,10 @@
           retained.push(node);
         }
       }
-      document.body.replaceChildren(...retained);
+      // WebView 83 has no replaceChildren. Reattach the same nodes so official
+      // player/plugin references and their event listeners remain valid.
+      document.body.textContent = '';
+      document.body.append(...retained);
       window.__bahaNativeTimeline = clock;
       return handoff;
     }

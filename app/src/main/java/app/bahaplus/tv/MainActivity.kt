@@ -211,6 +211,7 @@ class MainActivity : Activity() {
 
     private fun createPortal() {
         runCatching {
+            if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
             browser = WebView(this)
             cursor = RemoteCursor(this)
             browserPane = TvStyle.vertical(this).apply { setBackgroundColor(Color.BLACK) }
@@ -732,8 +733,14 @@ class MainActivity : Activity() {
         playbackErrorVisible = true
         lastError = code.take(80)
         native?.pauseForLifecycle()
-        activeDialog = AlertDialog.Builder(this).setTitle(tr("播放暂时无法继续", "播放暫時無法繼續"))
-            .setMessage(tr("可以重试，或查看官方页面中的验证、地区与账号提示。", "可以重試，或查看官方頁面中的驗證、地區與帳號提示。"))
+        val incompatible = code == "webview-script-incompatible"
+        activeDialog = AlertDialog.Builder(this).setTitle(
+            if (incompatible) tr("系统 WebView 与官网不兼容", "系統 WebView 與官網不相容")
+            else tr("播放暂时无法继续", "播放暫時無法繼續"))
+            .setMessage(if (incompatible)
+                tr("当前系统 WebView 仍无法运行官网播放器。可重试；若兼容处理后仍失败，请更新系统 WebView。仍可返回详情浏览和选集。",
+                    "目前的系統 WebView 仍無法執行官網播放器。可重試；若相容處理後仍失敗，請更新系統 WebView。仍可返回詳情瀏覽和選集。")
+                else tr("可以重试，或查看官方页面中的验证、地区与账号提示。", "可以重試，或查看官方頁面中的驗證、地區與帳號提示。"))
             .setPositiveButton(tr("重试", "重試")) { _, _ -> play(playingVideo) }
             .setNeutralButton(tr("查看官方页面", "查看官方頁面")) { _, _ ->
                 playbackErrorVisible = false
@@ -1045,6 +1052,7 @@ class MainActivity : Activity() {
                     showNotice(tr("官方账号同步暂不可用，请稍后刷新。", "官方帳號同步暫時無法使用，請稍後重新整理。"))
                 }
                 "authorization-lost" -> playbackError("official-document-changed")
+                "webview-script-incompatible" -> playbackError("webview-script-incompatible")
                 "search-error", "detail-error", "favorite-error", "operation-error", "navigation-error", "data-error" -> {
                     if (qrLoginView != null) qrLoginView?.error() else operationError(body)
                 }
@@ -1162,7 +1170,8 @@ class MainActivity : Activity() {
                 }.setNegativeButton(tr("返回", "返回"), null).show()
         }
         setting("licenses", tr("开源许可", "開源授權"), "Baha Plus TV · MIT / Apache 2.0") {
-            val license = listOf("LICENSE", "NOTICE", "licenses/Apache-2.0.txt").joinToString("\n\n") { path ->
+            val license = listOf("LICENSE", "NOTICE", "licenses/Apache-2.0.txt",
+                "compat/Babel-LICENSE.txt", "compat/CoreJS-LICENSE.txt").joinToString("\n\n") { path ->
                 assets.open(path).bufferedReader().use { it.readText() }
             }
             showText(tr("开源许可", "開源授權"), license)

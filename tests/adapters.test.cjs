@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const vm = require('node:vm');
-const adapters = join(__dirname, '../app/src/main/assets/adapters');
+const adapters = process.env.BAHA_ADAPTERS_DIR || join(__dirname, '../app/src/main/js/adapters');
 const source = name => readFileSync(join(adapters, name + '.js'), 'utf8');
 
 function page(options = {}) {
@@ -14,7 +14,7 @@ function page(options = {}) {
   const sandbox = {
     location, URL, AbortController, setTimeout, clearTimeout, Map, Set,
     document: { querySelector: () => null, querySelectorAll: () => [],
-      body: { replaceChildren() {} } },
+      body: { textContent: '', append(...nodes) { this.children = nodes; } } },
     bahaPostJSON: raw => messages.push(JSON.parse(raw)),
     fetch: async (url, init) => {
       requests.push({ url, init });
@@ -128,7 +128,8 @@ function nativePage(authorized = true) {
   const player = { currentSource: () => ({src: media.currentSrc}), isDisposed: () => false,
     error: () => null, pause: () => media.pause(), tech: () => ({vhs: {dispose() { removed.push('vhs'); }}}),
     trigger: event => events.push(event), currentTime: () => media.currentTime };
-  const root = { querySelector: () => null, contains: () => false };
+  const layer = { textContent: 'old danmaku', style: {} };
+  const root = { querySelector: selector => selector === '.vjs-danmu' ? layer : null, contains: () => false };
   root.closest = () => root;
   const state = {matches: true, contentAuthorized: authorized, phase: authorized ? 'content' : 'advertisement',
     media, player, root, manager: {setDanmuProcess() {}, cleanAll() {}}};
@@ -136,7 +137,7 @@ function nativePage(authorized = true) {
   p.load('native-hls'); p.load('native-playback');
   let current = true;
   const bridge = p.context.__bahaCreateNativePlayback({context: () => state, isCurrent: () => current});
-  return {...p, bridge, state, media, player, events, removed, expire() { current = false; }};
+  return {...p, bridge, state, media, player, layer, events, removed, expire() { current = false; }};
 }
 test('native handoff cannot prepare or commit while ads or authorization remain', async () => {
   const p = nativePage(false);
@@ -155,11 +156,22 @@ test('native handoff unloads web media and feeds only actual native positions to
   assert.equal(p.media.paused, true);
   assert.ok(p.removed.includes('src'));
   assert.ok(p.removed.includes('vhs'));
+  assert.equal(p.layer.textContent, '');
+  assert.equal(p.layer.style.display, 'none');
+  assert.deepEqual(p.context.document.body.children, [p.state.root]);
   assert.equal(p.bridge.sync({position: 45, duration: 120, paused: false, rate: 1, buffered: 55}), true);
   assert.equal(p.player.currentTime(), 45);
   assert.deepEqual(p.events, ['play', 'timeupdate']);
   assert.equal(p.bridge.sync({position: NaN, duration: 120, paused: false}), false);
   assert.equal(p.player.currentTime(), 45);
+});
+test('repeated native holds preserve the original playing state on older WebViews', async () => {
+  const p = nativePage();
+  assert.equal(p.bridge.hold(), true);
+  assert.equal(p.media.paused, true);
+  assert.equal(p.bridge.hold(), true);
+  assert.equal((await p.bridge.prepare()).paused, false);
+  assert.equal(p.bridge.commit().paused, false);
 });
 test('official revocation or an expired document stops native authorization and clock writes', async () => {
   const p = nativePage();

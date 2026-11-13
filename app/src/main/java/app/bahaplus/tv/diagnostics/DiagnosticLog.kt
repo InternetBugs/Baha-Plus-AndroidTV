@@ -93,11 +93,12 @@ class DiagnosticLog(private val directory: File, private val partBytes: Int = 25
     private fun safeField(key: String, value: Any): String? = when (key) {
         "screen" -> (value as? String)?.takeIf { it in setOf("home", "search", "favorites", "history", "settings") }
         "purpose" -> (value as? String)?.takeIf { it in setOf("HOME", "LOGIN", "QR_LOGIN", "PLAY") }
-        "phase" -> (value as? String)?.takeIf { it in setOf("content", "age", "advertisement", "error", "loading", "idle") }
+        "phase" -> (value as? String)?.takeIf { it in setOf("content", "age", "advertisement", "error", "loading", "idle",
+            "direct", "enabled", "compiled", "cached", "failed") }
         "code" -> (value as? String)?.takeIf {
             it in ERROR_CODES || Regex("media-[0-9]{4,6}").matches(it)
         }
-        "state", "count", "quality", "positionSeconds", "durationSeconds", "httpStatus", "webError", "memoryLevel" ->
+        "state", "count", "quality", "positionSeconds", "durationSeconds", "httpStatus", "webError", "memoryLevel", "elapsedMs" ->
             (value as? Number)?.toLong()?.toString()
         "signedIn", "lowResources", "autoNext", "playing", "crashed", "accepted" -> (value as? Boolean)?.toString()
         else -> null
@@ -109,7 +110,7 @@ class DiagnosticLog(private val directory: File, private val partBytes: Int = 25
             "official-playback-error", "official-document-changed", "official-session-unresponsive",
             "official-handoff-rejected", "official-timeline-invalid", "official-session-denied",
             "native-initialize-timeout", "search-error", "detail-error", "favorite-error", "operation-error",
-            "navigation-error", "data-error"
+            "navigation-error", "data-error", "webview-script-incompatible"
         )
         private val OFFICIAL_EVENTS = setOf(
             "qr-login-ready", "qr-login-retrying", "qr-login-expired", "qr-login-error", "qr-login-complete",
@@ -123,7 +124,7 @@ class DiagnosticLog(private val directory: File, private val partBytes: Int = 25
             "app.crash", "app.state", "app.memory", "ui.tab", "ui.search", "ui.detail", "ui.refresh",
             "account.login", "account.logout", "player.request", "player.source", "player.active", "player.ended",
             "player.exit", "player.error", "player.state", "player.playing", "player.seek", "player.quality",
-            "web.started", "web.finished", "web.error", "web.http-error", "web.renderer-gone",
+            "web.started", "web.finished", "web.error", "web.http-error", "web.renderer-gone", "web.script-compat",
             "official.phase", "official.invalid"
         ) + OFFICIAL_EVENTS.map { "official.$it" }
     }

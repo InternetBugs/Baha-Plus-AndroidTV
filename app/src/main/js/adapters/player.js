@@ -254,8 +254,8 @@
     style.textContent = `
       html,body{margin:0!important;padding:0!important;width:100%!important;height:100%!important;overflow:hidden!important;background:#000!important}
       body>*{visibility:hidden!important}
-      #video-container{visibility:visible!important;position:fixed!important;inset:0!important;width:100%!important;height:100%!important;margin:0!important;padding:0!important;z-index:2147483000!important;background:#000!important;overflow:hidden!important}
-      #video-container>.video-js,#video-container>video-js{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;padding:0!important}
+      #video-container{visibility:visible!important;position:fixed!important;top:0!important;right:0!important;bottom:0!important;left:0!important;width:100%!important;height:100%!important;margin:0!important;padding:0!important;z-index:2147483000!important;background:#000!important;overflow:hidden!important}
+      #video-container>.video-js,#video-container>video-js{position:absolute!important;top:0!important;right:0!important;bottom:0!important;left:0!important;width:100%!important;height:100%!important;padding:0!important}
       #video-container video{width:100%!important;height:100%!important;object-fit:contain!important}
       #video-container .ncc-choosearea{max-width:94%!important}
       #video-container .ncc-choosearea>img{max-width:20vw!important;max-height:28vh!important;object-fit:contain}
@@ -291,7 +291,7 @@
     const img = document.querySelector('.data-img');
     const score = Number(text(document.querySelector('#acg_review .score-overall-number')));
     const count = Number((text(document.querySelector('#acg_review .score-overall-people'))
-      .match(/[0-9,]+/) || ['0'])[0].replaceAll(',', ''));
+      .match(/[0-9,]+/) || ['0'])[0].replace(/,/g, ''));
     let rating;
     const source = [...document.querySelectorAll('script')]
       .map(script => script.textContent || '').find(code => code.includes('new Bahamut.AcgReview'));

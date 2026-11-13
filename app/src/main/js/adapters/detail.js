@@ -34,7 +34,7 @@
   const img = doc.querySelector('.data-img');
   const score = Number(text(doc.querySelector('#acg_review .score-overall-number')));
   const countText = text(doc.querySelector('#acg_review .score-overall-people'));
-  const count = Number((countText.match(/[0-9,]+/) || ['0'])[0].replaceAll(',', ''));
+  const count = Number((countText.match(/[0-9,]+/) || ['0'])[0].replace(/,/g, ''));
   let distribution = null;
   const scoreScript = [...doc.querySelectorAll('script')].map(script => script.textContent || '')
     .find(source => source.includes('new Bahamut.AcgReview'));

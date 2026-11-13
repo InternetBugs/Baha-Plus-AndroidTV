@@ -3,18 +3,32 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val compileWebViewAdapters by tasks.registering(Exec::class) {
+    val destination = layout.buildDirectory.dir("generated/webviewAssets")
+    workingDir(rootProject.projectDir)
+    commandLine("node", rootProject.file("tools/build-webview-adapters.cjs"), destination.get().asFile)
+    inputs.dir("src/main/js/adapters")
+    inputs.dir("src/main/js/compat")
+    inputs.files(rootProject.files("tools/build-webview-adapters.cjs", "package.json", "package-lock.json"))
+    outputs.dir(destination)
+}
+tasks.named("preBuild") {
+    dependsOn(compileWebViewAdapters)
+}
+
 android {
     namespace = "app.bahaplus.tv"
     compileSdk = 36
     buildFeatures { buildConfig = true }
+    sourceSets.getByName("main").assets.srcDir(compileWebViewAdapters)
     defaultConfig {
         applicationId = "app.bahaplus.tv"
         minSdk = 24
         targetSdk = 36
-        versionCode = providers.gradleProperty("releaseVersionCode").orElse("3").get().toInt().also {
+        versionCode = providers.gradleProperty("releaseVersionCode").orElse("4").get().toInt().also {
             require(it in 1..2100000000) { "releaseVersionCode must be between 1 and 2100000000" }
         }
-        versionName = providers.gradleProperty("releaseVersionName").orElse("0.3.0").get()
+        versionName = providers.gradleProperty("releaseVersionName").orElse("0.3.1").get()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {

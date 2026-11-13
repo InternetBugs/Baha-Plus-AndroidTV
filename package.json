@@ -1,0 +1,18 @@
+{
+  "name": "baha-plus-android-tv-adapters",
+  "private": true,
+  "version": "0.3.1",
+  "scripts": {
+    "build:adapters": "node tools/build-webview-adapters.cjs",
+    "test": "node tools/test-webview-adapters.cjs"
+  },
+  "devDependencies": {
+    "@babel/standalone": "7.28.5",
+    "acorn": "8.15.0",
+    "core-js": "3.47.0",
+    "esbuild": "0.25.12"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

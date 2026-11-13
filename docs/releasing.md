@@ -50,7 +50,8 @@ Release 先以草稿创建并上传 APK、SHA-256，成功后才公开。若上�
 ## 本地验证同样的 Release 构建
 
 ```powershell
-node --test tests/*.test.cjs
+npm ci --ignore-scripts
+npm test
 python tools/check-project.py
 .\gradlew.bat testReleaseUnitTest lintRelease assembleRelease `
   '-PreleaseVersionName=0.1.1' '-PreleaseVersionCode=2'
