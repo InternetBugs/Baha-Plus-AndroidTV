@@ -5,6 +5,10 @@ The official-site adapters and search conversion data are derived from Baha-Plus
 The upstream MIT copyright and license are preserved in LICENSE and packaged as
 app/src/main/assets/LICENSE.
 
+The app icon, TV banner artwork and README icon reuse the Baha-Plus brand.
+The Android vector drawable is adapted from Baha-Plus/assets/brand.svg;
+assets/icon.png is copied unchanged from Baha-Plus/assets/icon.png.
+
 TV-specific changes include native HTTP catalog, account and playback requests,
 native navigation and playback controls, bounded image loading, QR login,
 TV search and favorite commands, and remote cursor navigation for web login.

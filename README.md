@@ -7,6 +7,7 @@
 > 4. 本项目不涉及破解或去广告功能。广告、会员权益、年龄验证与地区限制均以官方服务为准。
 
 <div align="center">
+  <img src="assets/icon.png" width="150" alt="Baha Plus TV 图标">
   <h1>Baha Plus TV</h1>
   <p>一个为安卓电视打造的巴哈姆特动画疯第三方客户端</p>
   <p>拿起遥控器，在大屏幕上继续你的追番日常。</p>
