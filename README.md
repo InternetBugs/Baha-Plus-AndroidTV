@@ -15,7 +15,7 @@
 - 2026-11-13，酥鱼在交互模拟器中测试后反馈“账号功能完全正常”；这是用户对本次账号功能的验收反馈，详细范围见 [扫码登录记录](docs/qr-login.md)。
 - 目标电视尚未连接；登录、官方验证、硬件解码、进度同步和整集播放均未通过真机验收。不能据此声称已能稳定播放。
 
-当前版本：[0.2.0 下载](https://github.com/InternetBugs/Baha-Plus-AndroidTV/releases/tag/v0.2.0)，APK 内应用版本为 `0.2.0`／versionCode 2。GitHub Actions 完成测试、Lint、Release 构建与固定密钥签名，Release 附带 APK 与 SHA-256 校验文件。更新内容见 [0.2.0 发布说明](docs/release-notes-0.2.0.md)。
+当前版本：[0.3.0 下载](https://github.com/InternetBugs/Baha-Plus-AndroidTV/releases/tag/v0.3.0)，APK 内应用版本为 `0.3.0`／versionCode 3。GitHub Actions 完成测试、Lint、Release 构建与固定密钥签名，Release 附带 APK 与 SHA-256 校验文件。更新内容见 [0.3.0 发布说明](docs/release-notes-0.3.0.md)。
 
 早期 `v0.1.0`／`v0.1.0-qr.1` 测试包使用调试签名，升级至本版需先卸载旧应用再安装；卸载会清除本地登录会话和设置，安装后需重新扫码登录。后续正式签名版本使用相同密钥。
 
