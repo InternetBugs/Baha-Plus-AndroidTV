@@ -2,6 +2,8 @@
 
 测试日期：2026-11-13，Asia/Taipei。
 
+后续同日已将本实验的协议、Cookie 容器与时钟移入 `src/main`，供普通入口和独立实验入口共同使用。本文保留独立访客实验当时的结果与产物；普通入口迁移后的状态见 [原生 HTTP 迁移](native-http-migration.md)。
+
 **访客播放路径及 24 分钟整集连续播放已通过。** 在 Android 10、32 位 x86、WebView 74 的隔离模拟器中，独立 Kotlin 会话通过官方 HTTP 接口完成设备初始化、策略读取、年龄确认、真实视频广告、授权取源及 Media3 正片播放。已完成两轮控制回归，以及 10 分钟和 24 分钟单集各一轮 1 倍速自然结束测试；各轮均观察到官方进度响应 `state: "ok"`，应用进程中的 WebView 数量为 0。
 
 此结果支持继续开发原生播放会话。登录账号的历史与跨端续播、完整广告调度、家长验证及目标 ARM 电视仍需单独验收，当前实验不能直接替换正式版播放流程。
@@ -24,7 +26,7 @@
 
 ## 实现范围
 
-[`NativeApiClient`](../app/src/nativeApi/java/app/bahaplus/tv/experiment/NativeApiClient.kt) 使用内存中的独立访客 Cookie 和 `HttpURLConnection` 请求官方接口；[`NativeApiActivity`](../app/src/nativeApi/java/app/bahaplus/tv/experiment/NativeApiActivity.kt) 使用原生 View 和 Media3，未创建 WebView，也未执行官网 JavaScript。
+[`NativeApiClient`](../app/src/main/java/app/bahaplus/tv/experiment/NativeApiClient.kt) 使用内存中的独立访客 Cookie 和 `HttpURLConnection` 请求官方接口；[`NativeApiActivity`](../app/src/nativeApi/java/app/bahaplus/tv/experiment/NativeApiActivity.kt) 使用原生 View 和 Media3，未创建 WebView，也未执行官网 JavaScript。
 
 流程为：
 
@@ -37,7 +39,7 @@
 
 广告解析仅将公共配置中的数组作为 JSON 读取。短于 30 秒的广告会停止实验，完整的官方广告回退链尚未实现。跳过按钮保持禁用，直到真实播放累计达到阈值且开始事件的请求成功。
 
-[`NativeApiPolicy`](../app/src/nativeApi/java/app/bahaplus/tv/experiment/NativeApiPolicy.kt) 限制当前支持的官方 HTTPS 媒体来源、设备类型和进度参数。接近片尾的完成标记保留官方语义；下文的整集测试另核对自然片尾后的进度响应。
+[`NativeApiPolicy`](../app/src/main/java/app/bahaplus/tv/experiment/NativeApiPolicy.kt) 限制当前支持的官方 HTTPS 媒体来源、设备类型和进度参数。接近片尾的完成标记保留官方语义；下文的整集测试另核对自然片尾后的进度响应。
 
 ## 实测结果
 
@@ -113,7 +115,7 @@
 
 官方设备接口返回的访客 `ANIME_SIGN` 使用 `Domain=gamer.com.tw`，另一访客 Cookie 使用 `.gamer.com.tw`。本次 Android 上的旧 `java.net.CookieManager` 接收规则遗漏了前者，导致官方策略返回错误 1007。另用独立宿主访客会话比较，Cookie 值带引号发送也会产生 1007。
 
-[`GuestCookieJar`](../app/src/nativeApi/java/app/bahaplus/tv/experiment/GuestCookieJar.kt) 为两个固定官方 HTTPS 来源保存浏览器格式的 Cookie，支持父域、host-only、路径、Secure、替换与过期删除，发送时不加旧式 Cookie 版本语法。它不是通用浏览器 Cookie 库，未实现完整公共后缀规则，不用于导入账号 Cookie。日志与证据只记录数量和是否存在所需名称。
+[`GuestCookieJar`](../app/src/main/java/app/bahaplus/tv/experiment/GuestCookieJar.kt) 在当时实验中为两个固定官方 HTTPS 来源保存独立访客 Cookie，支持父域、host-only、路径、Secure、替换与过期删除，发送时不加旧式 Cookie 版本语法。它不是通用浏览器 Cookie 库，未实现完整公共后缀规则；后续普通入口增加了操作内的账号 Cookie 快照导入。日志与证据只记录数量和是否存在所需名称。
 
 ## 构建与复测
 

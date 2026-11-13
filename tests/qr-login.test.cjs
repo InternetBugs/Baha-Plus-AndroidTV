@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const {readFileSync} = require('node:fs');
 const {join} = require('node:path');
-const source = readFileSync(join(__dirname, '../app/src/main/assets/adapters/qr-login.js'), 'utf8');
+const source = readFileSync(join(process.env.BAHA_ADAPTERS_DIR || join(__dirname, '../app/src/main/js/adapters'), 'qr-login.js'), 'utf8');
 const sessionId = 'a'.repeat(64), token = 'b'.repeat(288);
 const link = 'https://user.gamer.com.tw/link_login.php?token=' + token;
 

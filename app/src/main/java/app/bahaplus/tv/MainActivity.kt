@@ -36,9 +36,8 @@ import android.widget.Toast
 import androidx.recyclerview.widget.RecyclerView
 import androidx.webkit.WebViewCompat
 import app.bahaplus.tv.core.*
-import app.bahaplus.tv.data.GitHubUpdateChecker
-import app.bahaplus.tv.data.OfficialPortal
-import app.bahaplus.tv.data.PosterLoader
+import app.bahaplus.tv.data.*
+import app.bahaplus.tv.experiment.NativeApiClient
 import app.bahaplus.tv.diagnostics.Diagnostics
 import app.bahaplus.tv.player.NativePlayback
 import app.bahaplus.tv.ui.CatalogAdapter
@@ -68,23 +67,14 @@ class MainActivity : Activity() {
     private lateinit var browserTitle: TextView
     private lateinit var browserDone: TextView
     private lateinit var browserCursor: TextView
-    private lateinit var ageActions: LinearLayout
-    private lateinit var ageHint: TextView
-    private lateinit var ageAgree: TextView
-    private lateinit var ageDecline: TextView
-    private var agePromptVersion = 0
-    private var ageSubmitting = false
-    private lateinit var adSkipActions: LinearLayout
-    private lateinit var adSkipHint: TextView
-    private lateinit var adSkipButton: TextView
-    private var adSkipVersion = 0
-    private var adSkipAvailable = false
-    private var adSkipSubmitting = false
-    private lateinit var browser: WebView
+    private var browserInstance: WebView? = null
+    private val browser: WebView get() = checkNotNull(browserInstance)
     private lateinit var cursor: RemoteCursor
-    private lateinit var portal: OfficialPortal
+    private var portalInstance: OfficialPortal? = null
+    private val portal: OfficialPortal get() = checkNotNull(portalInstance)
     private var portalAvailable = false
     private var browserVisible = false
+    private var loginOpening = false
     private val navigation = linkedMapOf<String, TextView>()
     private var tab = "home"
     private var detailsOpen = false
@@ -105,11 +95,16 @@ class MainActivity : Activity() {
     private var accountSynced = false
     private var lastError = ""
     private var busy = true
-    private var lastSearchRequest = ""
-    private var lastDetailRequest = ""
-    private var lastFavoriteRequest = ""
-    private var pendingFavoriteId = ""
-    private var rendererRecovery = false
+    private val detailLoader = AnimeDetailLoader(deliver = { handler.post(it) })
+    private val catalogLoader = NativeTaskLoader { handler.post(it) }
+    private val searchLoader = NativeTaskLoader { handler.post(it) }
+    private val accountLoader = NativeTaskLoader { handler.post(it) }
+    private val favoriteLoader = NativeTaskLoader { handler.post(it) }
+    @Volatile private var accountRevision = 0
+    @Volatile private var activityDestroyed = false
+    private var detailLoading = false
+    private var detailFailed = false
+    private var favoritePending = false
     private var playbackErrorVisible = false
     private var grid: RecyclerView? = null
     private var gridStateKey: String? = null
@@ -161,7 +156,9 @@ class MainActivity : Activity() {
         playerLayer = FrameLayout(this).apply { visibility = View.GONE }
         buildShell()
         root.addView(playerLayer, FrameLayout.LayoutParams(-1, -1))
-        createPortal()
+        loadCatalog()
+        syncAccount()
+        if (tab == "search" && searchQuery.isNotBlank()) submitSearch(searchQuery)
         render()
         checkForUpdates(manual = false)
     }
@@ -209,9 +206,11 @@ class MainActivity : Activity() {
         updateAccount()
     }
 
-    private fun createPortal() {
+    private fun createPortal(ready: () -> Unit) {
+        if (portalAvailable) { ready(); return }
         runCatching {
-            browser = WebView(this)
+            if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
+            browserInstance = WebView(this)
             cursor = RemoteCursor(this)
             browserPane = TvStyle.vertical(this).apply { setBackgroundColor(Color.BLACK) }
             browserBar = TvStyle.horizontal(this).apply {
@@ -221,96 +220,62 @@ class MainActivity : Activity() {
             }
             browserTitle = TvStyle.label(this, "", 16f).apply { maxLines = 2 }
             browserBar.addView(browserTitle, LinearLayout.LayoutParams(0, -2, 1f))
-            browserDone = TvStyle.button(this, tr("完成登录", "完成登入")) {
-                if (portal.purpose == OfficialPortal.Purpose.PLAY) exitPlayback() else portal.finishLogin()
-            }
-            browserBar.addView(browserDone, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(10) })
-            browserBar.addView(TvStyle.button(this, tr("刷新", "重新整理")) { portal.reload() },
-                LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(9) })
+            browserDone = TvStyle.button(this, tr("完成登录", "完成登入")) { portal.finishLogin() }
+            browserBar.addView(browserDone)
+            browserBar.addView(TvStyle.button(this, tr("刷新", "重新整理")) { portal.reload() })
             browserCursor = TvStyle.button(this, tr("遥控光标", "遙控游標")) {
                 cursor.active = !cursor.active
                 if (cursor.active) browser.requestFocus()
             }
-            browserBar.addView(browserCursor, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(9) })
-            browserPane.addView(browserBar, LinearLayout.LayoutParams(-1, -2))
+            browserBar.addView(browserCursor)
+            browserPane.addView(browserBar)
             val surface = FrameLayout(this)
             surface.addView(browser, FrameLayout.LayoutParams(-1, -1))
             surface.addView(cursor, FrameLayout.LayoutParams(-1, -1))
             browserPane.addView(surface, LinearLayout.LayoutParams(-1, 0, 1f))
-            ageActions = TvStyle.horizontal(this).apply {
-                visibility = View.GONE
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(20), dp(12), dp(20), dp(12))
-                setBackgroundColor(TvStyle.rail)
-            }
-            ageHint = TvStyle.label(this, tr("请阅读官方分级提示\n左右选择 · 确认键执行", "請閱讀官方分級提示\n左右選擇 · 確認鍵執行"), 16f)
-            ageActions.addView(ageHint, LinearLayout.LayoutParams(0, -2, 1f))
-            ageAgree = TvStyle.button(this, tr("同意并继续", "同意並繼續"), ::confirmAge).apply { textSize = 20f }
-            ageDecline = TvStyle.button(this, tr("不同意，返回详情", "不同意，返回詳情"), ::exitPlayback).apply { textSize = 20f }
-            ageActions.addView(ageAgree, LinearLayout.LayoutParams(dp(208), dp(56)).apply { leftMargin = dp(16) })
-            ageActions.addView(ageDecline, LinearLayout.LayoutParams(dp(240), dp(56)).apply { leftMargin = dp(16) })
-            ageAgree.nextFocusLeftId = ageAgree.id
-            ageAgree.nextFocusRightId = ageDecline.id
-            ageDecline.nextFocusLeftId = ageAgree.id
-            ageDecline.nextFocusRightId = ageDecline.id
-            for (button in listOf(ageAgree, ageDecline)) {
-                button.nextFocusUpId = browserDone.id
-                button.nextFocusDownId = button.id
-                browserActionKeys(button)
-            }
-            browserPane.addView(ageActions, LinearLayout.LayoutParams(-1, -2))
-            adSkipActions = TvStyle.horizontal(this).apply {
-                visibility = View.GONE
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(20), dp(12), dp(20), dp(12))
-                setBackgroundColor(TvStyle.rail)
-            }
-            adSkipHint = TvStyle.label(this, "", 16f).apply { maxLines = 2 }
-            adSkipActions.addView(adSkipHint, LinearLayout.LayoutParams(0, -2, 1f))
-            adSkipButton = TvStyle.button(this, tr("跳过广告", "跳過廣告"), ::skipAd).apply {
-                textSize = 20f
-                nextFocusLeftId = id
-                nextFocusRightId = id
-                nextFocusDownId = id
-                nextFocusUpId = browserDone.id
-            }
-            browserActionKeys(adSkipButton)
-            adSkipActions.addView(adSkipButton, LinearLayout.LayoutParams(dp(240), dp(56)).apply { leftMargin = dp(16) })
-            browserPane.addView(adSkipActions, LinearLayout.LayoutParams(-1, -2))
-            for (index in 0 until browserBar.childCount) {
-                browserBar.getChildAt(index).takeIf { it.isFocusable }?.setOnKeyListener { _, code, event ->
-                    if (code == KeyEvent.KEYCODE_DPAD_DOWN && event.action == KeyEvent.ACTION_DOWN) {
-                        val target = when {
-                            ageActions.visibility == View.VISIBLE -> ageAgree
-                            adSkipActions.visibility == View.VISIBLE && adSkipAvailable -> adSkipButton
-                            else -> null
-                        }
-                        target?.requestFocus() == true
-                    } else false
-                }
-            }
             root.addView(browserPane, FrameLayout.LayoutParams(1, 1))
-            portal = OfficialPortal(browser, preferences, ::onOfficialEvent, ::showBrowser, ::onRendererGone)
+            portalInstance = OfficialPortal(browser, ::onOfficialEvent, ::showBrowser, ::onRendererGone)
             portalAvailable = true
             showBrowser(false, "")
-            portal.initialize()
+            portal.initialize(ready)
         }.onFailure {
+            loginOpening = false
             portalAvailable = false
-            busy = false
-            lastError = "webview-unavailable"
             if (::browserPane.isInitialized) root.removeView(browserPane)
+            browserInstance?.let { runCatching { it.destroy() } }
+            browserInstance = null
+            portalInstance = null
+            closeQrLogin()
+            render()
+            showNotice(tr("系统 WebView 不可用，无法登录；仍可浏览和播放。", "系統 WebView 無法使用，無法登入；仍可瀏覽及播放。"))
         }
+    }
+
+    private fun releasePortal() {
+        loginOpening = false
+        if (!portalAvailable) return
+        portalAvailable = false
+        browserVisible = false
+        cursor.active = false
+        root.removeView(browserPane)
+        browserPane.removeAllViews()
+        val previous = portalInstance
+        portalInstance = null
+        browserInstance = null
+        previous?.destroy()
     }
 
     private fun changeTab(key: String) {
         Diagnostics.record("ui.tab", "screen" to key)
-        if (detailsOpen) detailsOpen = false
+        if (detailsOpen) {
+            detailLoader.cancel()
+            autoStartVideo = null
+            detailsOpen = false
+        }
         saveGrid()
         tab = key
         render(restoreFocus = false)
-        if ((key == "history" || key == "favorites") && portalAvailable && accountId != null) {
-            portal.whenHome { portal.syncAccount() }
-        }
+        if ((key == "history" || key == "favorites") && accountId != null) syncAccount()
     }
     private fun render(restoreFocus: Boolean = true) {
         if (!::content.isInitialized || native != null || playingVideo.isNotEmpty() || browserVisible ||
@@ -356,8 +321,8 @@ class MainActivity : Activity() {
                 heading(tr("今天想看什么？", "今天想看什麼？"), tr("新番与热门动画", "新番與熱門動畫"))
                 if (catalog.isEmpty()) {
                     empty(if (busy) tr("正在连接动画疯", "正在連線動畫瘋") else tr("首页暂不可用", "首頁暫時無法使用"),
-                        if (!portalAvailable) tr("设备需要可用的系统 WebView。请更新系统或 WebView 组件后重试。", "裝置需要可用的系統 WebView。請更新系統或 WebView 元件後重試。")
-                        else tr("读取官方内容；如需验证，会打开官方页面。", "讀取官方內容；若需驗證，會開啟官方頁面。"), ::refresh)
+                        if (busy) tr("正在读取官方接口。", "正在讀取官方介面。")
+                        else tr("请检查网络后重试。", "請檢查網路後重試。"), ::refresh)
                 } else {
                     val rows = mutableListOf<CatalogRow>()
                     if (history.isNotEmpty()) {
@@ -381,7 +346,7 @@ class MainActivity : Activity() {
         }
         content.addView(notice, LinearLayout.LayoutParams(-1, -2))
     }
-    private fun empty(title: String, subtitle: String, retry: (() -> Unit)? = null) {
+    private fun empty(title: String, subtitle: String, retry: (() -> Unit)? = null): LinearLayout {
         val panel = TvStyle.vertical(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(26), dp(14), dp(26), dp(26))
@@ -396,6 +361,7 @@ class MainActivity : Activity() {
             primaryContent = button
         }
         content.addView(panel, LinearLayout.LayoutParams(-1, 0, 1f))
+        return panel
     }
     private fun emptyAccount() {
         empty(tr("连接你的巴哈姆特账号", "連接你的巴哈姆特帳號"),
@@ -518,18 +484,28 @@ class MainActivity : Activity() {
     private fun submitSearch(raw: String) {
         Diagnostics.record("ui.search")
         val query = raw.trim().codePoints().limit(100).toArray().let { String(it, 0, it.size) }
-        if (query.isBlank() || !portalAvailable) return
+        if (query.isBlank()) return
         (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(window.decorView.windowToken, 0)
         searchQuery = query
         searchDraft = query
         searchResults = emptyList()
         busy = true
         render()
-        portal.whenHome { if (!detailsOpen && tab == "search" && searchQuery == query) lastSearchRequest = portal.search(query) }
+        val queries = listOf(query, preferences.toTraditional(query)).distinct()
+        searchLoader.load(OfficialHttpSession(), { NativeCatalogApi(it).search(queries) }) { result ->
+            if (searchQuery != query) return@load
+            busy = false
+            result.onSuccess { searchResults = it }.onFailure { nativeRequestError(it) }
+            if (!detailsOpen && tab == "search") {
+                render()
+                if (searchResults.isNotEmpty()) focusContent(preferGrid = true)
+            }
+        }
     }
 
     private fun openDetail(anime: Anime, resumeVideo: String? = null) {
         Diagnostics.record("ui.detail")
+        detailLoader.cancel()
         saveGrid()
         detailsOpen = true
         selectedAnime = anime
@@ -537,29 +513,61 @@ class MainActivity : Activity() {
         autoStartVideo = resumeVideo
         detailFocus = 0
         episodePosition = 0
+        detailLoading = currentDetail == null
+        detailFailed = false
         render()
         focusContent()
         if (resumeVideo != null && currentDetail?.episodes?.any { it.id == resumeVideo } == true) {
             play(resumeVideo)
             return
         }
-        if (portalAvailable) {
-            portal.whenHome {
-                if (detailsOpen && playingVideo.isEmpty() && selectedAnime?.id == anime.id) {
-                    lastDetailRequest = portal.detail(anime.id)
-                }
+        requestDetail(anime, resumeVideo)
+    }
+    private fun requestDetail(anime: Anime, resumeVideo: String? = autoStartVideo) {
+        detailLoading = true
+        detailFailed = false
+        render()
+        val knownVideo = anime.latestVideoId.ifEmpty {
+            (catalog + searchResults + history.map { it.anime }).firstOrNull {
+                it.id == anime.id && it.latestVideoId.isNotEmpty()
+            }?.latestVideoId.orEmpty()
+        }
+        Diagnostics.record("detail.request")
+        detailLoader.load(anime.copy(latestVideoId = knownVideo), resumeVideo) { result ->
+            if (isFinishing || isDestroyed || !detailsOpen || playingVideo.isNotEmpty() || selectedAnime?.id != anime.id) {
+                return@load
             }
+            detailLoading = false
+            result.fold(onSuccess = { detail ->
+                Diagnostics.record("detail.completed", "count" to detail.episodes.size)
+                detailCache[detail.animeId] = detail
+                currentDetail = detail
+                render()
+                val video = autoStartVideo
+                autoStartVideo = null
+                if (video != null) play(video)
+            }, onFailure = { error ->
+                detailFailed = true
+                lastError = (error as? AnimeDetailException)?.code ?: "detail-invalid"
+                Diagnostics.record("detail.failed", "code" to lastError)
+                render()
+                if (currentDetail != null) showNotice(tr("详情更新失败，请稍后重试。", "詳情更新失敗，請稍後重試。"))
+            })
         }
     }
     private fun renderDetail() {
         val anime = selectedAnime ?: return
         val detail = currentDetail
-        heading(detail?.title ?: anime.title, if (detail == null) tr("正在读取番剧信息", "正在讀取動畫資訊")
+        heading(detail?.title ?: anime.title, if (detail == null && detailFailed) tr("详情读取失败", "詳情讀取失敗")
+            else if (detail == null) tr("正在读取番剧信息", "正在讀取動畫資訊")
             else tr("${detail.episodes.size} 集 · 官方内容", "${detail.episodes.size} 集 · 官方內容"))
         if (detail == null) {
-            empty(tr("正在加载详情", "正在載入詳情"), tr("选集和简介来自官方页面。", "選集與簡介來自官方頁面。")) {
-                if (portalAvailable) portal.whenHome { lastDetailRequest = portal.detail(anime.id) }
-            }
+            val placeholder = empty(if (detailFailed) tr("暂时无法读取详情", "暫時無法讀取詳情")
+                else tr("正在加载详情", "正在載入詳情"),
+                if (detailFailed) tr("请检查网络连接后重试。", "請檢查網路連線後重試。")
+                else tr("正在读取官方简介与集数。", "正在讀取官方簡介與集數。"),
+                if (detailLoading) null else ({ requestDetail(anime) }))
+            if (detailLoading) primaryContent = placeholder.apply { isFocusable = true }
             return
         }
         val header = TvStyle.horizontal(this)
@@ -602,8 +610,8 @@ class MainActivity : Activity() {
         content.addView(header)
         content.addView(TvStyle.label(this, tr("选集", "選集"), 21f, bold = true).apply { setPadding(0, dp(18), 0, dp(10)) })
         if (detail.episodes.isEmpty()) {
-            empty(tr("暂未读取到可播放集数", "暫未讀取到可播放集數"), tr("请刷新详情或完成官网验证。", "請重新整理詳情或完成官網驗證。")) {
-                portal.whenHome { lastDetailRequest = portal.detail(anime.id) }
+            empty(tr("暂未读取到可播放集数", "暫未讀取到可播放集數"), tr("请刷新详情后重试。", "請重新整理詳情後重試。")) {
+                requestDetail(anime)
             }
         } else {
             val episodes = RecyclerView(this).apply {
@@ -651,23 +659,33 @@ class MainActivity : Activity() {
     }
     private fun toggleFavorite(id: String) {
         if (accountId == null) { login(); return }
-        if (lastFavoriteRequest.isNotEmpty() || !portalAvailable) return
+        if (favoritePending) return
+        val anime = selectedAnime?.takeIf { it.id == id } ?: return
+        val owner = accountId ?: return
         val desired = favorites.none { it.id == id }
-        pendingFavoriteId = id
-        portal.whenHome { lastFavoriteRequest = portal.favorite(id, desired) }
+        favoritePending = true
+        favoriteLoader.load(accountSession(), { NativeAccountApi(it).favorite(anime, desired, owner) }) { result ->
+            favoritePending = false
+            result.onSuccess {
+                favorites = if (desired) (favorites + anime).distinctBy { it.id } else favorites.filterNot { it.id == id }
+                detailFocus = 1
+                render()
+                syncAccount()
+            }.onFailure { nativeRequestError(it) }
+        }
         showNotice(tr("正在更新追番", "正在更新追番"))
     }
     private fun favoriteLabel(id: String) = if (favorites.any { it.id == id }) tr("取消追番", "取消追番") else tr("加入追番", "加入追番")
 
     private fun play(videoId: String) {
         val detail = currentDetail ?: return
-        val anime = selectedAnime ?: return
-        if (!portalAvailable || detail.episodes.none { it.id == videoId }) return
+        if (detail.episodes.none { it.id == videoId }) return
+        detailLoader.cancel()
+        detailLoading = false
         Diagnostics.record("player.request")
         diagnosticPhase = ""
         activeDialog?.dismiss()
-        val previous = native
-        previous?.release()
+        native?.release()
         native = null
         playerLayer.removeAllViews()
         playingVideo = videoId
@@ -676,24 +694,18 @@ class MainActivity : Activity() {
         playbackErrorVisible = false
         shell.visibility = View.GONE
         playerLayer.visibility = View.VISIBLE
-        if (previous == null) portal.play(anime.id, videoId)
-        else portal.stopPlayback {
-            if (playingVideo == videoId) portal.play(anime.id, videoId)
-        }
-    }
-    private fun acceptSource(body: JSONObject) {
-        if (native != null || playingVideo.isEmpty() || body.optString("videoId") != playingVideo) return
-        val detail = playingDetail ?: return
-        val source = runCatching { NativeSource.parse(body.getJSONObject("source")) }.getOrNull()
-        if (source == null) { playbackError("native-source-unavailable"); return }
-        Diagnostics.record("player.source", "count" to source.variants.size,
-            "positionSeconds" to source.position, "durationSeconds" to source.duration)
         val current = playingVideo
-        val candidate = NativePlayback(this, portal, preferences, source, detail, current,
+        val revision = accountRevision
+        val session = NativeApiClient(OfficialHttpSession.snapshotCookies(),
+            isCurrent = { !activityDestroyed && accountRevision == revision }) { stage, status ->
+            if (status != null && status in 100..599) {
+                Diagnostics.record("player.http", "phase" to stage, "httpStatus" to status)
+            }
+        }
+        val candidate = NativePlayback(this, preferences, session, detail, current,
             onActive = {
                 Diagnostics.record("player.active")
                 if (playingVideo == current) {
-                    showBrowser(false, "")
                     shell.visibility = View.GONE
                     playerLayer.visibility = View.VISIBLE
                 }
@@ -732,16 +744,18 @@ class MainActivity : Activity() {
         playbackErrorVisible = true
         lastError = code.take(80)
         native?.pauseForLifecycle()
+        val message = when (code) {
+            "parent-verification-required" -> tr("当前账号要求家长验证，接口未获准播放。请检查官方账号的家长设置后重试。", "目前帳號要求家長驗證，介面未獲准播放。請檢查官方帳號的家長設定後重試。")
+            "verification-required" -> tr("官方要求额外验证，请完成登录验证后重试。", "官方要求額外驗證，請完成登入驗證後重試。")
+            "short-ad-needs-fallback" -> tr("当前广告未完成所需播放时长，请重试。", "目前廣告未完成所需播放時長，請重試。")
+            else -> tr("官方播放请求未完成，请检查网络、地区或账号状态后重试。", "官方播放請求未完成，請檢查網路、地區或帳號狀態後重試。")
+        }
         activeDialog = AlertDialog.Builder(this).setTitle(tr("播放暂时无法继续", "播放暫時無法繼續"))
-            .setMessage(tr("可以重试，或查看官方页面中的验证、地区与账号提示。", "可以重試，或查看官方頁面中的驗證、地區與帳號提示。"))
-            .setPositiveButton(tr("重试", "重試")) { _, _ -> play(playingVideo) }
-            .setNeutralButton(tr("查看官方页面", "查看官方頁面")) { _, _ ->
-                playbackErrorVisible = false
-                showBrowser(true, "play")
-            }
+            .setMessage(message).setPositiveButton(tr("重试", "重試")) { _, _ -> play(playingVideo) }
             .setNegativeButton(tr("返回详情", "返回詳情")) { _, _ -> exitPlayback() }
             .setOnCancelListener { exitPlayback() }.show()
     }
+
     private fun exitPlayback() {
         if (playingVideo.isEmpty()) return
         Diagnostics.record("player.exit")
@@ -760,7 +774,7 @@ class MainActivity : Activity() {
             render()
             focusContent()
         }
-        if (portalAvailable) portal.stopPlayback { portal.home() }
+        syncAccount()
     }
 
     private fun showBrowser(visible: Boolean, reason: String) {
@@ -769,8 +783,6 @@ class MainActivity : Activity() {
         val wasVisible = browserVisible
         browserVisible = visible
         cursor.active = false
-        showAgeConfirmation(false)
-        showAdSkip(false, null)
         browserPane.layoutParams = FrameLayout.LayoutParams(if (visible) -1 else 1, if (visible) -1 else 1)
         browserPane.alpha = if (visible) 1f else .01f
         browserBar.visibility = if (visible) View.VISIBLE else View.GONE
@@ -780,10 +792,8 @@ class MainActivity : Activity() {
         if (visible) {
             closeQrLogin()
             browserPane.bringToFront()
-            browserCursor.visibility = if (portal.purpose == OfficialPortal.Purpose.PLAY) View.GONE else View.VISIBLE
-            browserDone.text = if (reason == "play") tr("返回详情", "返回詳情") else tr("完成登录 / 验证", "完成登入 / 驗證")
+            browserDone.text = tr("完成登录 / 验证", "完成登入 / 驗證")
             browserTitle.text = when (reason) {
-                "play" -> tr("官方验证与广告 · 完成后自动播放", "官方驗證與廣告 · 完成後自動播放")
                 "login" -> tr("登录巴哈姆特账号", "登入巴哈姆特帳號")
                 else -> tr("请完成官方页面中的验证", "請完成官方頁面中的驗證")
             }
@@ -796,116 +806,23 @@ class MainActivity : Activity() {
             handler.post(presentUpdateResult)
         }
     }
-    private fun browserActionKeys(button: TextView) {
-        var confirmPressed = false
-        button.setOnFocusChangeListener { _, focused -> if (!focused) confirmPressed = false }
-        // Require a fresh press on this control, including when it appears
-        // while OK is held. Dispatch only on release and consume repeats.
-        button.setOnKeyListener { view, code, event ->
-            if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
-                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) confirmPressed = true
-                if (event.action == KeyEvent.ACTION_UP) {
-                    val activate = confirmPressed && !event.isCanceled
-                    confirmPressed = false
-                    if (activate) view.performClick()
-                }
-                true
-            } else false
-        }
-    }
-    private fun showAdSkip(advertisement: Boolean, state: JSONObject?) {
-        if (!::adSkipActions.isInitialized) return
-        val show = advertisement && browserVisible && playingVideo.isNotEmpty() && state?.optBoolean("visible") == true
-        if (!show) {
-            if (adSkipActions.visibility == View.GONE) return
-            adSkipVersion++
-            adSkipAvailable = false
-            adSkipSubmitting = false
-            val restoreToolbar = adSkipActions.hasFocus()
-            adSkipActions.visibility = View.GONE
-            if (restoreToolbar && browserVisible) browserDone.requestFocus()
-            return
-        }
-        if (adSkipActions.visibility != View.VISIBLE) {
-            adSkipVersion++
-            adSkipActions.visibility = View.VISIBLE
-        }
-        if (adSkipSubmitting) return
-        val available = state?.optBoolean("available") == true
-        val seconds = state?.optInt("remainingSeconds", -1) ?: -1
-        adSkipHint.text = if (available) tr("官方已允许跳过广告\n按确认键继续播放", "官方已允許跳過廣告\n按確認鍵繼續播放")
-            else if (seconds >= 0) tr("广告 $seconds 秒", "廣告 $seconds 秒")
-            else tr("等待官方广告倒计时", "等待官方廣告倒數")
-        adSkipButton.text = if (available) tr("跳过广告", "跳過廣告") else tr("倒计时中…", "倒數中…")
-        adSkipButton.isEnabled = available
-        if (available && !adSkipAvailable) {
-            cursor.active = false
-            adSkipButton.requestFocus()
-        }
-        adSkipAvailable = available
-    }
-    private fun skipAd() {
-        if (adSkipSubmitting || !adSkipAvailable || adSkipActions.visibility != View.VISIBLE || !browserVisible) return
-        adSkipSubmitting = true
-        adSkipButton.isEnabled = false
-        adSkipHint.text = tr("正在提交官方跳过操作…", "正在提交官方跳過操作…")
-        val version = adSkipVersion
-        portal.skipAd result@ { accepted ->
-            if (version != adSkipVersion || !browserVisible) return@result
-            if (accepted) showAdSkip(false, null)
-            else {
-                adSkipSubmitting = false
-                adSkipAvailable = false
-                adSkipHint.text = tr("官方按钮暂不可用\n请稍候或刷新后重试", "官方按鈕暫時無法使用\n請稍候或重新整理後重試")
-                browserDone.requestFocus()
-            }
-        }
-    }
-    private fun showAgeConfirmation(available: Boolean) {
-        if (!::ageActions.isInitialized) return
-        val show = available && browserVisible && playingVideo.isNotEmpty()
-        if (show == (ageActions.visibility == View.VISIBLE)) return
-        agePromptVersion++
-        ageSubmitting = false
-        ageAgree.isEnabled = true
-        if (show) {
-            cursor.active = false
-            ageHint.text = tr("请阅读官方分级提示\n左右选择 · 确认键执行", "請閱讀官方分級提示\n左右選擇 · 確認鍵執行")
-            ageActions.visibility = View.VISIBLE
-            ageAgree.requestFocus()
-        } else {
-            val restoreToolbar = ageActions.hasFocus()
-            ageActions.visibility = View.GONE
-            if (restoreToolbar && browserVisible) browserDone.requestFocus()
-        }
-    }
-    private fun confirmAge() {
-        if (ageSubmitting || ageActions.visibility != View.VISIBLE || !browserVisible) return
-        ageSubmitting = true
-        ageAgree.isEnabled = false
-        ageHint.text = tr("正在提交官方年龄确认…", "正在提交官方年齡確認…")
-        val version = agePromptVersion
-        portal.confirmAge result@ { accepted ->
-            if (version != agePromptVersion || !browserVisible) return@result
-            if (accepted) showAgeConfirmation(false)
-            else {
-                ageSubmitting = false
-                ageAgree.isEnabled = true
-                ageHint.text = tr("官方按钮暂不可用\n请刷新后重试", "官方按鈕暫時無法使用\n請重新整理後重試")
-                ageAgree.requestFocus()
-            }
-        }
-    }
     private fun login() {
-        if (!portalAvailable) { showNotice(tr("系统 WebView 不可用", "系統 WebView 無法使用")); return }
+        if (loginOpening || qrLoginView != null || browserVisible) return
+        loginOpening = true
+        Diagnostics.record("account.login")
+        retireAccountRequests()
         closeQrLogin()
-        qrLoginView = QrLoginView(this, preferences,
-            onRefresh = { portal.refreshQrLogin() },
-            onWebLogin = { closeQrLogin(); portal.login() },
-            onCancel = ::cancelQrLogin)
-        root.addView(qrLoginView, FrameLayout.LayoutParams(-1, -1))
-        portal.qrLogin()
+        createPortal {
+            loginOpening = false
+            qrLoginView = QrLoginView(this, preferences,
+                onRefresh = { portal.refreshQrLogin() },
+                onWebLogin = { closeQrLogin(); portal.login() },
+                onCancel = ::cancelQrLogin)
+            root.addView(qrLoginView, FrameLayout.LayoutParams(-1, -1))
+            portal.qrLogin()
+        }
     }
+
     private fun closeQrLogin() {
         qrLoginView?.let { view -> view.dispose(); root.removeView(view) }
         qrLoginView = null
@@ -919,17 +836,15 @@ class MainActivity : Activity() {
         if (accountId == null) login()
         else activeDialog = AlertDialog.Builder(this).setTitle(tr("当前账号", "目前帳號"))
             .setMessage(accountName).setPositiveButton(tr("刷新同步", "重新同步")) { _, _ ->
-                if (portalAvailable) portal.whenHome { portal.syncAccount() }
+                syncAccount()
             }.setNegativeButton(tr("退出登录", "登出")) { _, _ ->
-                if (portalAvailable) portal.logout {
-                    accountId = null
-                    accountName = ""
-                    accountSynced = false
-                    favorites = emptyList()
-                    history = emptyList()
-                    updateAccount()
+                retireAccountRequests()
+                val clear = {
+                    clearAccount()
+                    releasePortal()
                     render()
                 }
+                if (portalAvailable) portal.logout(clear) else OfficialPortal.logout(clear)
             }.setNeutralButton(tr("返回", "返回"), null).show()
     }
     private fun updateAccount() {
@@ -939,174 +854,120 @@ class MainActivity : Activity() {
     }
     private fun refresh() {
         Diagnostics.record("ui.refresh")
-        busy = true
-        if (!portalAvailable) {
-            createPortal()
-        } else portal.home()
+        if (detailsOpen) { selectedAnime?.let { requestDetail(it) }; return }
+        loadCatalog()
+        syncAccount()
+        if (tab == "search" && searchQuery.isNotBlank()) submitSearch(searchQuery)
         render()
     }
 
-    private fun onOfficialEvent(body: JSONObject) {
-        if (isFinishing || isDestroyed) return
-        Diagnostics.record("official.${body.optString("type").take(80)}")
-        runCatching {
-            when (body.optString("type")) {
-                "qr-login-ready" -> if (qrLoginView != null && portal.purpose == OfficialPortal.Purpose.QR_LOGIN) {
-                    qrLoginView?.ready(QrLoginCode.parse(body))
-                }
-                "qr-login-retrying" -> qrLoginView?.retrying()
-                "qr-login-expired" -> qrLoginView?.error(expired = true)
-                "qr-login-error" -> qrLoginView?.error()
-                "qr-login-complete" -> if (qrLoginView != null) {
-                    qrLoginView?.authorizing()
-                    portal.completeQrLogin()
-                }
-                "catalog" -> {
-                    val items = body.getJSONArray("items")
-                    require(items.length() <= 5000)
-                    catalog = items.objects().map(Anime::parse).distinctBy { it.id }
-                    busy = false
-                    if (!detailsOpen && tab == "home") render()
-                }
-                "search" -> if (body.optString("requestId") == lastSearchRequest) {
-                    val items = body.getJSONArray("items")
-                    require(items.length() <= 5000)
-                    searchResults = items.objects().map(Anime::parse).distinctBy { it.id }
-                    busy = false
-                    render()
-                    if (searchResults.isNotEmpty()) focusContent(preferGrid = true)
-                }
-                "detail" -> if (body.optString("requestId") == lastDetailRequest && body.optString("id") == selectedAnime?.id) {
-                    val detail = AnimeDetail.parse(body.getString("id"), body.getJSONObject("detail"))
-                    detailCache[detail.animeId] = detail
-                    currentDetail = detail
-                    render()
-                    autoStartVideo?.let { video -> autoStartVideo = null; play(video) }
-                }
-                "account-authenticated" -> readProfile(body.getJSONObject("profile"))
-                "account-synced" -> {
-                    body.optJSONObject("profile")?.let(::readProfile)
-                    val favoriteData = body.getJSONArray("favorites")
-                    val historyData = body.getJSONArray("history")
-                    require(favoriteData.length() <= 5000 && historyData.length() <= 1000)
-                    favorites = favoriteData.objects().map(Anime::parse).distinctBy { it.id }
-                    history = historyData.objects().map(WatchEntry::parse).distinctBy { it.anime.id }
+    private fun loadCatalog() {
+        busy = true
+        catalogLoader.load(OfficialHttpSession(), { NativeCatalogApi(it).catalog() }) { result ->
+            busy = false
+            result.onSuccess { catalog = it }
+            if (!detailsOpen && tab == "home") render()
+            result.exceptionOrNull()?.let(::nativeRequestError)
+        }
+    }
+
+    private fun accountSession(cookies: Map<String, String> = OfficialHttpSession.snapshotCookies()): OfficialHttpSession {
+        val revision = accountRevision
+        return OfficialHttpSession(cookies,
+            isCurrent = { !activityDestroyed && revision == accountRevision })
+    }
+
+    private fun syncAccount(afterLogin: Boolean = false) {
+        val cookies = OfficialHttpSession.snapshotCookies()
+        if (cookies.values.all { it.isBlank() }) {
+            accountLoader.cancel()
+            clearAccount()
+            if (afterLogin) qrLoginView?.error() else render()
+            return
+        }
+        accountLoader.load(accountSession(cookies), { NativeAccountApi(it).account() }) { result ->
+            result.onSuccess { account ->
+                if (account == null) clearAccount()
+                else {
+                    accountId = account.id
+                    accountName = account.name
+                    favorites = account.favorites
+                    history = account.history
                     accountSynced = true
                     updateAccount()
-                    if (browserVisible && portal.purpose == OfficialPortal.Purpose.LOGIN) portal.finishLogin()
-                    else if (detailsOpen || tab in setOf("home", "favorites", "history")) render()
                 }
-                "account-guest" -> {
-                    if (qrLoginView != null) qrLoginView?.error()
-                    accountId = null
-                    accountName = ""
-                    accountSynced = false
-                    favorites = emptyList()
-                    history = emptyList()
-                    updateAccount()
-                    if (detailsOpen || tab in setOf("home", "favorites", "history")) render()
-                }
-                "favorite-complete" -> if (body.optString("requestId") == lastFavoriteRequest && body.optString("id") == pendingFavoriteId) {
-                    val id = body.getString("id")
-                    val anime = selectedAnime?.takeIf { it.id == id }
-                    favorites = if (body.getBoolean("saved") && anime != null) (favorites + anime).distinctBy { it.id }
-                    else favorites.filterNot { it.id == id }
-                    lastFavoriteRequest = ""
-                    detailFocus = 1
-                    render()
-                    portal.syncAccount()
-                }
-                "player-detail" -> {
-                    val detail = AnimeDetail.parse(body.getString("id"), body.getJSONObject("detail"))
-                    detailCache[detail.animeId] = detail
-                    if (detail.animeId == selectedAnime?.id) currentDetail = detail
-                }
-                "player-state" -> {
-                    if (body.optString("videoId") != playingVideo) return
-                    val phase = body.optString("phase").take(40)
-                    if (phase != diagnosticPhase) {
-                        diagnosticPhase = phase
-                        Diagnostics.record("official.phase", "phase" to phase)
+                if (afterLogin) {
+                    if (account == null) {
+                        qrLoginView?.error()
+                        return@onSuccess
                     }
-                    showAgeConfirmation(body.optString("phase") == "age" && body.optBoolean("ageConfirmationAvailable"))
-                    showAdSkip(body.optString("phase") == "advertisement", body.optJSONObject("adSkip"))
-                    when (body.optString("phase")) {
-                        "content" -> if (body.optDouble("duration", 0.0) > 0 && native == null) portal.prepareNative()
-                        "error" -> playbackError("official-playback-error")
-                        "age" -> browserTitle.text = tr("请完成官方年龄确认", "請完成官方年齡確認")
-                        "advertisement" -> browserTitle.text = tr("正在播放官方广告", "正在播放官方廣告")
-                    }
+                    closeQrLogin()
+                    releasePortal()
                 }
-                "native-source" -> acceptSource(body)
-                "verification-required" -> showNotice(tr("完成官网验证后，请重试刚才的操作。", "完成官網驗證後，請重試剛才的操作。"))
-                "account-error" -> {
-                    qrLoginView?.error()
-                    accountSynced = false
-                    showNotice(tr("官方账号同步暂不可用，请稍后刷新。", "官方帳號同步暫時無法使用，請稍後重新整理。"))
-                }
-                "authorization-lost" -> playbackError("official-document-changed")
-                "search-error", "detail-error", "favorite-error", "operation-error", "navigation-error", "data-error" -> {
-                    if (qrLoginView != null) qrLoginView?.error() else operationError(body)
-                }
+                if (detailsOpen || tab in setOf("home", "favorites", "history")) render()
+            }.onFailure {
+                if (afterLogin) qrLoginView?.error()
+                nativeRequestError(it)
             }
-        }.onFailure {
-            Diagnostics.record("official.invalid")
-            qrLoginView?.error()
-            lastError = "official-data-invalid"
-            busy = false
-            showNotice(tr("官方内容格式已变化，请刷新或完成官网验证。", "官方內容格式已變更，請重新整理或完成官網驗證。"))
         }
     }
-    private fun readProfile(profile: JSONObject) {
-        val id = profile.getString("id")
-        val name = profile.getString("displayName")
-        require(Regex("^[A-Za-z0-9_-]{1,64}$").matches(id) && name.isNotBlank() && name.length <= 200)
-        if (accountId?.equals(id, ignoreCase = true) != true) {
-            favorites = emptyList()
-            history = emptyList()
-            accountSynced = false
-        }
-        accountId = id
-        accountName = name
+
+    private fun retireAccountRequests() {
+        accountRevision++
+        accountLoader.cancel()
+        favoriteLoader.cancel()
+        favoritePending = false
+    }
+
+    private fun clearAccount() {
+        accountId = null
+        accountName = ""
+        accountSynced = false
+        favorites = emptyList()
+        history = emptyList()
         updateAccount()
-        if (qrLoginView != null && portal.purpose == OfficialPortal.Purpose.QR_LOGIN) {
-            closeQrLogin()
-            portal.finishLogin()
+    }
+
+    private fun nativeRequestError(error: Throwable) {
+        lastError = (error as? NativeApiException)?.code ?: "native-data-invalid"
+        if (lastError in setOf("login-required", "account-stale")) clearAccount()
+        Diagnostics.record("api.error", "code" to lastError)
+        showNotice(tr("官方请求未完成，请稍后刷新重试。", "官方請求未完成，請稍後重新整理重試。"))
+    }
+
+    private fun onOfficialEvent(body: JSONObject) {
+        if (isFinishing || isDestroyed || !portalAvailable) return
+        when (body.optString("type")) {
+            "qr-login-ready" -> runCatching { qrLoginView?.ready(QrLoginCode.parse(body)) }
+                .onFailure { qrLoginView?.error() }
+            "qr-login-retrying" -> qrLoginView?.retrying()
+            "qr-login-expired" -> qrLoginView?.error(expired = true)
+            "qr-login-error" -> qrLoginView?.error()
+            "qr-login-complete" -> {
+                qrLoginView?.authorizing()
+                portal.completeQrLogin()
+            }
+            "login-complete" -> {
+                android.webkit.CookieManager.getInstance().flush()
+                syncAccount(afterLogin = true)
+            }
+            "login-finished" -> {
+                closeQrLogin()
+                showBrowser(false, "")
+                releasePortal()
+                syncAccount()
+                render()
+            }
+            "operation-error", "navigation-error", "verification-required" -> qrLoginView?.error()
         }
     }
-    private fun operationError(body: JSONObject) {
-        val request = body.optString("requestId")
-        lastError = body.optString("type")
-        busy = false
-        if (playingVideo.isNotEmpty()) { playbackError(lastError); return }
-        if (request == lastFavoriteRequest || body.optString("type") == "favorite-error") lastFavoriteRequest = ""
-        render()
-        showNotice(tr("请求未完成。请刷新重试，必要时完成官网验证。", "請求未完成。請重新整理重試，必要時完成官網驗證。"))
-    }
+
     private fun onRendererGone() {
         Diagnostics.record("web.renderer-gone")
         closeQrLogin()
-        native?.release()
-        native = null
-        playingVideo = ""
-        playingDetail = null
-        playerLayer.removeAllViews()
-        browserVisible = false
-        portalAvailable = false
-        root.removeView(browserPane)
-        runCatching { browser.destroy() }
-        lastError = "webview-renderer-gone"
-        busy = false
+        releasePortal()
         render()
-        if (!rendererRecovery) {
-            rendererRecovery = true
-            handler.post {
-                if (!isFinishing && !isDestroyed) {
-                    createPortal()
-                    showNotice(tr("官方页面已重新连接，请重新选择播放。", "官方頁面已重新連線，請重新選擇播放。"))
-                }
-            }
-        }
+        showNotice(tr("登录页面已断开，请重新打开登录。", "登入頁面已中斷，請重新開啟登入。"))
     }
 
     private fun renderSettings() {
@@ -1162,7 +1023,8 @@ class MainActivity : Activity() {
                 }.setNegativeButton(tr("返回", "返回"), null).show()
         }
         setting("licenses", tr("开源许可", "開源授權"), "Baha Plus TV · MIT / Apache 2.0") {
-            val license = listOf("LICENSE", "NOTICE", "licenses/Apache-2.0.txt").joinToString("\n\n") { path ->
+            val license = listOf("LICENSE", "NOTICE", "licenses/Apache-2.0.txt",
+                "compat/Babel-LICENSE.txt", "compat/CoreJS-LICENSE.txt").joinToString("\n\n") { path ->
                 assets.open(path).bufferedReader().use { it.readText() }
             }
             showText(tr("开源许可", "開源授權"), license)
@@ -1307,6 +1169,7 @@ class MainActivity : Activity() {
             if (native?.handleBack() != true) exitPlayback()
         }
         else if (detailsOpen) {
+            detailLoader.cancel()
             detailsOpen = false
             autoStartVideo = null
             render()
@@ -1351,15 +1214,19 @@ class MainActivity : Activity() {
         diagnosticsView?.dispose()
         diagnosticsView = null
         if (::updateChecker.isInitialized) updateChecker.destroy()
+        activityDestroyed = true
+        accountRevision++
+        catalogLoader.destroy()
+        searchLoader.destroy()
+        accountLoader.destroy()
+        favoriteLoader.destroy()
+        detailLoader.destroy()
         closeQrLogin()
         activeDialog?.dismiss()
         native?.release()
         native = null
         handler.removeCallbacksAndMessages(null)
-        if (::portal.isInitialized) {
-            if (::browserPane.isInitialized) root.removeView(browserPane)
-            portal.destroy()
-        }
+        releasePortal()
         if (::posters.isInitialized) posters.destroy()
         super.onDestroy()
     }

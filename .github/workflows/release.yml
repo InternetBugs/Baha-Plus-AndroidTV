@@ -121,7 +121,8 @@ jobs:
 
       - name: Check adapters and project resources
         run: |
-          node --test tests/*.test.cjs
+          npm ci --ignore-scripts
+          npm test
           python3 tools/check-project.py
 
       - name: Test, lint and build release APK

@@ -5,9 +5,9 @@ The official-site adapters and search conversion data are derived from Baha-Plus
 The upstream MIT copyright and license are preserved in LICENSE and packaged as
 app/src/main/assets/LICENSE.
 
-TV-specific changes include keeping the official controls accessible before the
-native video handoff, native navigation, bounded image loading, TV search and
-favorite commands, and remote cursor navigation.
+TV-specific changes include native HTTP catalog, account and playback requests,
+native navigation and playback controls, bounded image loading, QR login,
+TV search and favorite commands, and remote cursor navigation for web login.
 
 Gradle Wrapper 8.14.3 is distributed under Apache License 2.0.
 Its official JAR SHA-256:
@@ -18,3 +18,14 @@ Kotlin runtime is distributed under Apache License 2.0.
 ZXing Core 3.5.4 is distributed under Apache License 2.0.
 Copyright 2007 ZXing authors. Used for local QR code generation.
 No upstream bundled font files or liquid-glass libraries are included.
+
+Babel standalone 7.28.5 is distributed under the MIT License.
+Copyright (c) 2014-present Sebastian McKenzie and other contributors.
+The license is packaged as compat/Babel-LICENSE.txt. Babel is loaded only in a
+local, network-blocked compiler when an older WebView lacks official login-page syntax.
+Official scripts are fetched from their original public HTTPS locations at
+runtime during login; no official player source is bundled.
+
+The legacy script prefix includes core-js 3.47.0 String.replaceAll, MIT License.
+Copyright (c) 2014-2025 Denis Pushkarev, 2025 CoreJS Company.
+The license is packaged as compat/CoreJS-LICENSE.txt.

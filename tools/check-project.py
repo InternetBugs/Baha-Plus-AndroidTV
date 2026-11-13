@@ -11,10 +11,15 @@ for path in [root / "app/src/main/AndroidManifest.xml", *resources.rglob("*.xml"
     ET.parse(path)
 mapping = json.loads((root / "app/src/main/assets/data/search-traditional.json").read_text(encoding="utf-8"))
 assert mapping["动"] == "動" and mapping["画"] == "畫"
-for path in (root / "app/src/main/assets/adapters").glob("*.js"):
+subprocess.run(["node", str(root / "tools/build-webview-adapters.cjs")], check=True, cwd=root)
+for path in (root / "app/src/main/js/adapters").glob("*.js"):
     subprocess.run(["node", "--check", str(path)], check=True, cwd=root)
 assert (root / "app/src/main/assets/LICENSE").is_file(), "APK must carry upstream MIT license"
 assert (root / "app/src/main/assets/licenses/Apache-2.0.txt").is_file(), "APK must carry Apache 2.0 license"
+assert (root / "app/build/generated/webviewAssets/compat/Babel-LICENSE.txt").read_bytes() == \
+    (root / "node_modules/@babel/standalone/LICENSE").read_bytes(), "Babel license must be packaged unchanged"
+assert (root / "app/build/generated/webviewAssets/compat/CoreJS-LICENSE.txt").read_bytes() == \
+    (root / "node_modules/core-js/LICENSE").read_bytes(), "core-js license must be packaged unchanged"
 assert (root / "app/src/main/assets/NOTICE").read_bytes() == (root / "NOTICE").read_bytes(), "Packaged attribution notice must match"
 manifest = ET.parse(root / "app/src/main/AndroidManifest.xml")
 android = "{http://schemas.android.com/apk/res/android}"

@@ -6,7 +6,7 @@ import java.net.URI
 import kotlin.math.abs
 import kotlin.math.min
 
-/** Pure protocol decisions, isolated from the normal application and WebView. */
+/** Pure protocol decisions shared by the native player and isolated guest experiment. */
 object NativeApiPolicy {
     fun media(raw: String): Boolean = runCatching {
         val uri = URI(raw)

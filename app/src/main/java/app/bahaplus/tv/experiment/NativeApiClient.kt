@@ -6,8 +6,13 @@ import java.net.URI
 import java.net.URLEncoder
 import java.util.UUID
 
-/** In-memory guest cookies only. No WebView, browser cookie import or disk cache. */
-class NativeApiClient(private val event: (String, Int?) -> Unit) : AutoCloseable {
+/** Native playback protocol. Defaults to an isolated guest; normal entry injects a cookie snapshot. */
+class NativeApiClient(
+    initialCookies: Map<String, String> = emptyMap(),
+    private val isCurrent: () -> Boolean = { true },
+    private val openConnection: (URI) -> HttpURLConnection = { it.toURL().openConnection() as HttpURLConnection },
+    private val event: (String, Int?) -> Unit
+) : AutoCloseable {
     companion object {
         const val WEB = "https://ani.gamer.com.tw"
         const val API = "https://api.gamer.com.tw"
@@ -15,6 +20,7 @@ class NativeApiClient(private val event: (String, Int?) -> Unit) : AutoCloseable
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
     private val cookies = GuestCookieJar()
+    private val lock = Any()
     @Volatile private var connection: HttpURLConnection? = null
     @Volatile private var closed = false
     private var device = ""
@@ -22,21 +28,27 @@ class NativeApiClient(private val event: (String, Int?) -> Unit) : AutoCloseable
     private lateinit var gate: PlaybackGate
     private var ad: VideoAd? = null
 
+    init {
+        initialCookies.forEach { (host, header) -> cookies.importHeader(URI("https://$host/"), header) }
+    }
+
     data class Preparation(val title: String, val rating: Int, val needsAd: Boolean,
         val breakpoint: Double, val duration: Double, val ad: VideoAd?)
 
     fun prepare(id: String): Preparation {
-        require(id.matches(Regex("[0-9]{1,10}")))
+        require(id.matches(Regex("[1-9][0-9]{0,9}")))
         video = id
         // Fetch inert HTML only to establish the normal guest session.
         text("page", "$WEB/animeVideo.php", mapOf("sn" to video))
         device = json("device", "$WEB/ajax/getdeviceid.php").getString("deviceid")
         val metadata = json("metadata", "$API/anime/v1/video.php", mapOf("videoSn" to video))
             .getJSONObject("data").getJSONObject("video")
+        if (metadata.optString("videoSn") != video) throw ApiFailure("video-mismatch")
         if (metadata.optBoolean("requestParentPassword")) throw ApiFailure("parent-verification-required")
         val token = json("policy", "$WEB/ajax/token.php", mapOf("adID" to "undefined", "sn" to video,
             "device" to device, "hash" to UUID.randomUUID().toString().replace("-", "").take(12)))
-        if (!token.has("time")) throw ApiFailure("policy-format")
+        if (token.has("error") && !token.isNull("error")) throw ApiFailure("policy-rejected")
+        if (!token.has("time") || token.getInt("time") < 0) throw ApiFailure("policy-format")
         val needsAd = token.getInt("time") != 1
         gate = PlaybackGate(needsAd)
         if (needsAd) {
@@ -113,14 +125,17 @@ class NativeApiClient(private val event: (String, Int?) -> Unit) : AutoCloseable
     }
 
     private fun text(stage: String, url: String, args: Map<String, String> = emptyMap()): String {
-        check(!closed)
+        checkCurrent()
         val query = args.entries.joinToString("&") {
             URLEncoder.encode(it.key, "UTF-8") + "=" + URLEncoder.encode(it.value, "UTF-8")
         }
         val uri = URI(url + if (query.isEmpty()) "" else "?$query")
         require(uri.scheme == "https" && uri.host in setOf("ani.gamer.com.tw", "api.gamer.com.tw", "i2.bahamut.com.tw"))
-        val request = uri.toURL().openConnection() as HttpURLConnection
-        connection = request
+        val request = openConnection(uri)
+        synchronized(lock) {
+            if (closed) { request.disconnect(); throw ApiFailure("session-stale") }
+            connection = request
+        }
         try {
             request.instanceFollowRedirects = false
             request.connectTimeout = 15000
@@ -133,6 +148,7 @@ class NativeApiClient(private val event: (String, Int?) -> Unit) : AutoCloseable
                 cookies.header(uri).takeIf { it.isNotEmpty() }?.let { request.setRequestProperty("Cookie", it) }
             }
             val status = request.responseCode
+            checkCurrent()
             event(stage, status)
             if (uri.host != "i2.bahamut.com.tw") {
                 cookies.receive(uri, request.headerFields)
@@ -142,9 +158,11 @@ class NativeApiClient(private val event: (String, Int?) -> Unit) : AutoCloseable
                 }
             }
             if (status !in 200..299) throw ApiFailure(stage, status)
+            if (request.contentLength > 2_000_000) throw ApiFailure("response-size")
             val bytes = request.inputStream.use { it.readBytesLimited(2_000_000) }
             val body = bytes.toString(Charsets.UTF_8)
             if (body.contains("challenge-platform") || body.contains("cf-chl-")) throw ApiFailure("verification-required")
+            checkCurrent()
             return body
         } catch (error: ApiFailure) {
             throw error
@@ -153,16 +171,28 @@ class NativeApiClient(private val event: (String, Int?) -> Unit) : AutoCloseable
                 (error.cause?.let { "-" + it.javaClass.simpleName } ?: ""))
         } finally {
             request.disconnect()
-            connection = null
+            synchronized(lock) { if (connection === request) connection = null }
         }
     }
 
-    override fun close() { closed = true; connection?.disconnect(); cookies.clear() }
+    override fun close() {
+        val pending = synchronized(lock) {
+            closed = true
+            connection.also { connection = null }
+        }
+        pending?.disconnect()
+        cookies.clear()
+    }
+
+    private fun checkCurrent() {
+        if (closed || Thread.currentThread().isInterrupted || !isCurrent()) throw ApiFailure("session-stale")
+    }
 
     private fun java.io.InputStream.readBytesLimited(limit: Int): ByteArray {
         val output = java.io.ByteArrayOutputStream()
         val buffer = ByteArray(8192)
         while (true) {
+            checkCurrent()
             val length = read(buffer)
             if (length < 0) break
             if (output.size() + length > limit) throw ApiFailure("response-size")

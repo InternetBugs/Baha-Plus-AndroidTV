@@ -1,6 +1,12 @@
 param([switch]$Offline)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules\esbuild\package.json')) -or
+    -not (Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules\acorn\package.json')) -or
+    -not (Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules\@babel\standalone\package.json')) -or
+    -not (Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules\core-js\package.json'))) {
+    throw 'WebView adapter build dependencies are missing. Run npm ci --ignore-scripts first.'
+}
 $propertiesPath = Join-Path $projectRoot 'local.properties'
 if (-not (Test-Path -LiteralPath $propertiesPath)) {
     throw 'Android SDK is not configured. Set sdk.dir in local.properties or run tools/Bootstrap-Android.ps1.'
@@ -25,7 +31,7 @@ if ($Offline) { $arguments += '--offline' }
 if ($LASTEXITCODE -ne 0) { throw 'Android checks/build failed.' }
 $artifactDirectory = Join-Path $projectRoot 'artifacts'
 New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
-$artifactName = 'BahaPlusTV-0.3.0-debug.apk'
+$artifactName = 'BahaPlusTV-0.3.1-debug.apk'
 $artifact = Join-Path $artifactDirectory $artifactName
 Copy-Item -LiteralPath (Join-Path $projectRoot 'app\build\outputs\apk\debug\app-debug.apk') -Destination $artifact -Force
 $checksum = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
