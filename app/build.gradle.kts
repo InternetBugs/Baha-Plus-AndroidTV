@@ -25,10 +25,10 @@ android {
         applicationId = "app.bahaplus.tv"
         minSdk = 24
         targetSdk = 36
-        versionCode = providers.gradleProperty("releaseVersionCode").orElse("4").get().toInt().also {
+        versionCode = providers.gradleProperty("releaseVersionCode").orElse("5").get().toInt().also {
             require(it in 1..2100000000) { "releaseVersionCode must be between 1 and 2100000000" }
         }
-        versionName = providers.gradleProperty("releaseVersionName").orElse("0.3.1").get()
+        versionName = providers.gradleProperty("releaseVersionName").orElse("0.4.0").get()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
