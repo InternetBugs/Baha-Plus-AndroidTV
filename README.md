@@ -25,6 +25,29 @@
 
 也欢迎体验我的另一款作品 [Baha Plus](https://github.com/InternetBugs/Baha-Plus)：以液态玻璃风格打造的巴哈姆特动画疯手机端第三方客户端，支持 **iOS（苹果）与 Android（安卓）**。
 
+## 界面预览
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center"><img src="assets/screenshots/home.png" width="480" alt="首页"></td>
+      <td align="center"><img src="assets/screenshots/detail.png" width="480" alt="动画详情页"></td>
+    </tr>
+    <tr>
+      <td align="center"><sub>首页：侧栏与海报网格</sub></td>
+      <td align="center"><sub>动画详情：简介、剧集与追番</sub></td>
+    </tr>
+    <tr>
+      <td align="center"><img src="assets/screenshots/schedule.png" width="480" alt="时间表"></td>
+      <td align="center"><img src="assets/screenshots/player.png" width="480" alt="播放页"></td>
+    </tr>
+    <tr>
+      <td align="center"><sub>时间表：按星期查看更新</sub></td>
+      <td align="center"><sub>播放页：控制条、画质、倍速与弹幕</sub></td>
+    </tr>
+  </table>
+</div>
+
 ## 功能
 
 ### 在电视上发现想看的动画
