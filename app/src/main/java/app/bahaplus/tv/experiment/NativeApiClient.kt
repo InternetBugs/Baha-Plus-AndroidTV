@@ -1,6 +1,7 @@
 package app.bahaplus.tv.experiment
 
 import app.bahaplus.tv.core.Danmaku
+import app.bahaplus.tv.core.OfficialSite
 import app.bahaplus.tv.data.NativeDanmakuParser
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -18,8 +19,6 @@ class NativeApiClient(
     companion object {
         const val WEB = "https://ani.gamer.com.tw"
         const val API = "https://api.gamer.com.tw"
-        const val AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
     private val cookies = GuestCookieJar()
     private val lock = Any()
@@ -150,7 +149,7 @@ class NativeApiClient(
             request.connectTimeout = 15000
             request.readTimeout = 15000
             request.useCaches = false
-            request.setRequestProperty("User-Agent", AGENT)
+            request.setRequestProperty("User-Agent", OfficialSite.USER_AGENT)
             request.setRequestProperty("Referer", "$WEB/animeVideo.php?sn=$video")
             request.setRequestProperty("Origin", WEB)
             if (uri.host != "i2.bahamut.com.tw") {

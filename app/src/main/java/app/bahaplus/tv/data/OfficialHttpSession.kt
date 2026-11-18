@@ -1,6 +1,7 @@
 package app.bahaplus.tv.data
 
 import android.webkit.CookieManager
+import app.bahaplus.tv.core.OfficialSite
 import app.bahaplus.tv.experiment.GuestCookieJar
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -71,7 +72,7 @@ internal class OfficialHttpSession(
             request.connectTimeout = 12000
             request.readTimeout = 12000
             request.useCaches = false
-            request.setRequestProperty("User-Agent", AGENT)
+            request.setRequestProperty("User-Agent", OfficialSite.USER_AGENT)
             request.setRequestProperty("Referer", "$WEB/")
             request.setRequestProperty("Origin", WEB)
             cookies.header(uri).takeIf { it.isNotEmpty() }?.let { request.setRequestProperty("Cookie", it) }
@@ -132,8 +133,6 @@ internal class OfficialHttpSession(
     companion object {
         const val WEB = "https://ani.gamer.com.tw"
         const val API = "https://api.gamer.com.tw"
-        const val AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         private const val MAX_BYTES = 2_000_000
         private val HOSTS = setOf("ani.gamer.com.tw", "api.gamer.com.tw")
         fun snapshotCookies(): Map<String, String> = runCatching {

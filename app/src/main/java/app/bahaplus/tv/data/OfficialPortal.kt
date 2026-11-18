@@ -54,7 +54,7 @@ class OfficialPortal(
             displayZoomControls = false
             useWideViewPort = true
             loadWithOverviewMode = true
-            userAgentString = OfficialHttpSession.AGENT
+            userAgentString = OfficialSite.USER_AGENT
         }
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)

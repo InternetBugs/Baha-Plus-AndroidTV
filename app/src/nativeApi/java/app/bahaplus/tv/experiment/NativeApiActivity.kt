@@ -23,6 +23,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.ui.PlayerView
+import app.bahaplus.tv.core.OfficialSite
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -116,7 +117,7 @@ class NativeApiActivity : Activity() {
         status = label("使用独立访客会话；不会读取原应用账号。", 16f)
         val media = PlayerView(this).apply { useController = false; isFocusable = false }
         panel.addView(media, LinearLayout.LayoutParams(-1, 0, 1f))
-        val data = DefaultHttpDataSource.Factory().setUserAgent(NativeApiClient.AGENT)
+        val data = DefaultHttpDataSource.Factory().setUserAgent(OfficialSite.USER_AGENT)
             .setConnectTimeoutMs(15000).setReadTimeoutMs(15000)
             .setAllowCrossProtocolRedirects(false)
             .setDefaultRequestProperties(mapOf("Referer" to NativeApiClient.WEB + "/", "Origin" to NativeApiClient.WEB))

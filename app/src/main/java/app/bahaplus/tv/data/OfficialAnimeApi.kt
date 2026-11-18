@@ -161,6 +161,7 @@ internal class OfficialAnimeApi(
             request.instanceFollowRedirects = false
             request.useCaches = false
             request.setRequestProperty("Accept", "application/json")
+            request.setRequestProperty("User-Agent", OfficialSite.USER_AGENT)
             // Never access WebView CookieManager or persist Set-Cookie from these public responses.
             if (request.responseCode != HttpURLConnection.HTTP_OK) throw AnimeDetailException("detail-http")
             if (request.contentType?.substringBefore(';')?.trim()?.lowercase() != "application/json") {

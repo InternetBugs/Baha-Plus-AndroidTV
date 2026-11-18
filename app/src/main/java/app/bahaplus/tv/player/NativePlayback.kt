@@ -27,6 +27,7 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.ui.PlayerView
 import app.bahaplus.tv.R
 import app.bahaplus.tv.core.AnimeDetail
+import app.bahaplus.tv.core.OfficialSite
 import app.bahaplus.tv.core.Preferences
 import app.bahaplus.tv.diagnostics.Diagnostics
 import app.bahaplus.tv.experiment.ApiFailure
@@ -122,7 +123,7 @@ class NativePlayback(
     }
 
     private val factory = DefaultHttpDataSource.Factory()
-        .setUserAgent(NativeApiClient.AGENT)
+        .setUserAgent(OfficialSite.USER_AGENT)
         .setConnectTimeoutMs(12000).setReadTimeoutMs(15000)
         .setAllowCrossProtocolRedirects(false)
         .setDefaultRequestProperties(mapOf("Referer" to "https://ani.gamer.com.tw/", "Origin" to "https://ani.gamer.com.tw"))

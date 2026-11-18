@@ -7,6 +7,9 @@ import java.net.URI
 object OfficialSite {
     const val HOME = "https://ani.gamer.com.tw/"
     const val ORIGIN = "https://ani.gamer.com.tw"
+    /** Single browser identity for every gamer.com.tw/bahamut.com.tw request and WebView. */
+    const val USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     private val identifier = Regex("^[0-9]{1,10}$")
     fun validId(id: String) = identifier.matches(id)
     fun allowedNavigation(raw: String): Boolean = runCatching {

@@ -86,6 +86,7 @@ class PosterLoader(context: Context, lowResources: Boolean) {
                 connection.instanceFollowRedirects = false
                 connection.connectTimeout = 8000
                 connection.readTimeout = 8000
+                connection.setRequestProperty("User-Agent", OfficialSite.USER_AGENT)
                 val code = connection.responseCode
                 if (code in 300..399) {
                     url = URL(URL(url), connection.getHeaderField("Location") ?: error("Redirect missing")).toString()
