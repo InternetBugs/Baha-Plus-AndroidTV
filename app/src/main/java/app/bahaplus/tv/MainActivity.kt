@@ -32,6 +32,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.webkit.WebViewCompat
 import app.bahaplus.tv.core.*
@@ -44,6 +45,7 @@ import app.bahaplus.tv.ui.AnimeRatingView
 import app.bahaplus.tv.ui.CatalogRow
 import app.bahaplus.tv.ui.DiagnosticsView
 import app.bahaplus.tv.ui.QrLoginView
+import app.bahaplus.tv.ui.ScheduleAdapter
 import app.bahaplus.tv.ui.TvStyle
 import app.bahaplus.tv.ui.TvGridLayoutManager
 import org.json.JSONObject
@@ -78,6 +80,7 @@ class MainActivity : Activity() {
     private var searchQuery = ""
     private var searchDraft = ""
     private var searchResults = emptyList<Anime>()
+    private var scheduleDay = -1
     private var catalog = emptyList<Anime>()
     private var favorites = emptyList<Anime>()
     private var history = emptyList<WatchEntry>()
@@ -133,9 +136,10 @@ class MainActivity : Activity() {
         Diagnostics.record("app.created")
         posters = PosterLoader(this, preferences.lowResources)
         updateChecker = GitHubUpdateChecker(BuildConfig.VERSION_NAME)
-        tab = savedInstanceState?.getString("tab")?.takeIf { it in setOf("home", "search", "favorites", "history", "settings") } ?: "home"
+        tab = savedInstanceState?.getString("tab")?.takeIf { it in setOf("home", "schedule", "search", "favorites", "history", "settings") } ?: "home"
         searchQuery = savedInstanceState?.getString("query").orEmpty().take(200)
         searchDraft = searchQuery
+        scheduleDay = savedInstanceState?.getInt("scheduleDay", -1) ?: -1
         window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or
@@ -171,7 +175,8 @@ class MainActivity : Activity() {
         rail.addView(brand)
         rail.addView(brandTv)
         navigation.clear()
-        val labels = listOf("home" to tr("首页", "首頁"), "search" to tr("搜索", "搜尋"),
+        val labels = listOf("home" to tr("首页", "首頁"), "schedule" to tr("时间表", "時間表"),
+            "search" to tr("搜索", "搜尋"),
             "favorites" to tr("追番", "追番"), "history" to tr("历史", "歷史"), "settings" to tr("设置", "設定"))
         for ((key, label) in labels) {
             val button = TvStyle.button(this, label) { changeTab(key) }.apply {
@@ -252,6 +257,7 @@ class MainActivity : Activity() {
         }
         saveGrid()
         tab = key
+        if (key == "schedule" && catalog.isEmpty() && !busy) loadCatalog()
         render(restoreFocus = false)
         if ((key == "history" || key == "favorites") && accountId != null) syncAccount()
     }
@@ -281,6 +287,7 @@ class MainActivity : Activity() {
             return
         }
         when (tab) {
+            "schedule" -> renderSchedule()
             "search" -> renderSearch()
             "settings" -> renderSettings()
             "favorites" -> {
@@ -410,6 +417,61 @@ class MainActivity : Activity() {
                 list.post { list.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus() }
             }
         }
+    }
+
+    private fun renderSchedule() {
+        val today = UpdateSchedule.weekday()
+        if (scheduleDay !in 0..6) scheduleDay = today
+        heading(tr("番剧时间表", "動畫時間表"),
+            tr("按台湾时间（UTC+8）每周更新，实际上架以官方公告为准", "依台灣時間（UTC+8）每週更新，實際上架以官方公告為準"))
+        val picker = TvStyle.horizontal(this)
+        val buttons = HashMap<Int, TextView>()
+        for (day in intArrayOf(1, 2, 3, 4, 5, 6, 0)) {
+            val label = weekdayLabel(day) + if (day == today) tr(" 今天", " 今天") else ""
+            val button = TvStyle.button(this, label) {
+                scheduleDay = day
+                render()
+            }.apply {
+                isSelected = day == scheduleDay
+                setTextColor(if (day == scheduleDay) TvStyle.focus else TvStyle.text)
+            }
+            picker.addView(button, LinearLayout.LayoutParams(-2, dp(46)).apply { rightMargin = dp(6) })
+            buttons[day] = button
+        }
+        content.addView(picker, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+        primaryContent = buttons[scheduleDay]
+        val items = if (catalog.isEmpty()) emptyList() else UpdateSchedule.day(catalog, scheduleDay)
+        if (items.isEmpty()) {
+            empty(if (catalog.isEmpty() && busy) tr("正在读取时间表", "正在讀取時間表")
+                else if (catalog.isEmpty()) tr("时间表暂不可用", "時間表暫時無法使用")
+                else tr("本日暂无更新", "本日暫無更新"),
+                if (catalog.isEmpty() && busy) tr("正在读取官方更新信息。", "正在讀取官方更新資訊。")
+                else if (catalog.isEmpty()) tr("请检查网络后刷新。", "請檢查網路後重新整理。")
+                else tr("切换其他星期查看，或稍后刷新。", "切換其他星期查看，或稍後重新整理。"),
+                if (catalog.isEmpty() && !busy) (::refresh) else null)
+            return
+        }
+        val list = RecyclerView(this)
+        val manager = LinearLayoutManager(this).apply {
+            initialPrefetchItemCount = if (preferences.lowResources) 4 else 8
+        }
+        val adapter = ScheduleAdapter(this, items, posters, navigation[tab]!!.id,
+            timeFallback = tr("待定", "待定"),
+            onLeft = { navigation[tab]?.requestFocus() },
+            onClick = { anime -> openDetail(anime) })
+        list.layoutManager = manager
+        list.adapter = adapter
+        list.itemAnimator = null
+        list.setItemViewCacheSize(if (preferences.lowResources) 8 else 16)
+        list.clipToPadding = false
+        list.setPadding(0, 0, 0, dp(14))
+        list.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
+    }
+    private fun weekdayLabel(day: Int): String {
+        val simplified = arrayOf("周日", "周一", "周二", "周三", "周四", "周五", "周六")
+        val traditional = arrayOf("週日", "週一", "週二", "週三", "週四", "週五", "週六")
+        return tr(simplified[day], traditional[day])
     }
 
     private fun renderSearch() {
@@ -846,7 +908,7 @@ class MainActivity : Activity() {
         catalogLoader.load(OfficialHttpSession(), { NativeCatalogApi(it).catalog() }) { result ->
             busy = false
             result.onSuccess { catalog = it }
-            if (!detailsOpen && tab == "home") render()
+            if (!detailsOpen && (tab == "home" || tab == "schedule")) render()
             result.exceptionOrNull()?.let(::nativeRequestError)
         }
     }
@@ -1195,6 +1257,7 @@ class MainActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("tab", tab)
         outState.putString("query", searchQuery)
+        outState.putInt("scheduleDay", scheduleDay)
         super.onSaveInstanceState(outState)
     }
     override fun onTrimMemory(level: Int) {

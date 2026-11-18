@@ -29,11 +29,18 @@ internal class NativeCatalogApi(private val session: OfficialHttpSession) {
                 require(rows.length() <= 5000)
                 for (index in 0 until rows.length()) {
                     val row = rows.getJSONObject(index)
-                    val item = parseAnime(row, if (section == "season") row.optString("volume")
-                        else Regex("共\\s*\\d+\\s*集").find(row.optString("info"))?.value.orEmpty())
+                    val seasonal = section == "season"
+                    val item = parseAnime(
+                        row,
+                        if (seasonal) row.optString("volume")
+                        else Regex("共\\s*\\d+\\s*集").find(row.optString("info"))?.value.orEmpty(),
+                        day = if (seasonal) row.optInt("week", 0).takeIf { it in 1..7 }?.rem(7) else null,
+                        time = if (seasonal) Anime.scheduleTime(row.optString("upTimeHours")) else null)
                     val previous = results[item.id]
                     results[item.id] = previous?.copy(sections = (previous.sections + section).distinct(),
-                        latestVideoId = previous.latestVideoId.ifEmpty { item.latestVideoId })
+                        latestVideoId = previous.latestVideoId.ifEmpty { item.latestVideoId },
+                        updateDay = previous.updateDay ?: item.updateDay,
+                        updateTime = previous.updateTime ?: item.updateTime)
                         ?: item.copy(sections = listOf(section))
                 }
                 require(results.size <= 5000)
@@ -52,14 +59,15 @@ internal class NativeCatalogApi(private val session: OfficialHttpSession) {
             }.distinctBy { it.id }
         }
 
-        private fun parseAnime(row: JSONObject, label: String): Anime {
+        private fun parseAnime(row: JSONObject, label: String, day: Int? = null, time: String? = null): Anime {
             val id = row.get("animeSn").toString()
             val title = row.getString("title").trim()
             val cover = row.getString("cover")
             require(id.matches(Regex("[1-9][0-9]{0,9}")) && title.isNotEmpty() &&
                 title.length < 500 && OfficialSite.image(cover) && label.length <= 200)
             return Anime(id, title, cover, label,
-                row.opt("videoSn")?.toString()?.takeIf { it.matches(Regex("[1-9][0-9]{0,9}")) }.orEmpty())
+                row.opt("videoSn")?.toString()?.takeIf { it.matches(Regex("[1-9][0-9]{0,9}")) }.orEmpty(),
+                updateDay = day, updateTime = time)
         }
     }
 }

@@ -42,4 +42,29 @@ class ModelsTest {
             assertThrows(IllegalArgumentException::class.java) { QrLoginCode.parse(body(expiry = expiry), 1000) }
         }
     }
+
+    @Test fun scheduleTimesAreOptionalAndValidated() {
+        fun anime(day: Any?, time: Any?) = JSONObject().put("id", "1").put("title", "動畫")
+            .put("cover", "https://p2.bahamut.com.tw/a.jpg")
+            .apply { if (day != null) put("updateDay", day); if (time != null) put("updateTime", time) }
+        val value = Anime.parse(anime(0, "23:30"))
+        assertEquals(0, value.updateDay)
+        assertEquals("23:30", value.updateTime)
+        assertNull(Anime.parse(anime(7, "25:00")).updateDay)
+        assertNull(Anime.parse(anime(0, "9:30")).updateTime)
+        assertNull(Anime.parse(anime(null, null)).updateTime)
+        assertThrows(IllegalArgumentException::class.java) { value.copy(updateTime = "24:00") }
+    }
+
+    @Test fun scheduleUsesTaipeiWeekdayAndSortsKnownTimesFirst() {
+        assertEquals(1, UpdateSchedule.weekday(java.time.Instant.parse("2024-01-01T00:00:00Z").toEpochMilli()))
+        assertEquals(0, UpdateSchedule.weekday(java.time.Instant.parse("2024-01-07T00:00:00Z").toEpochMilli()))
+        assertEquals(2, UpdateSchedule.weekday(java.time.Instant.parse("2024-01-01T16:00:00Z").toEpochMilli()))
+        fun anime(id: String, day: Int?, time: String?, sections: List<String> = listOf("season")) =
+            Anime(id, "動畫$id", "https://p2.bahamut.com.tw/a.jpg", sections = sections,
+                updateDay = day, updateTime = time)
+        val catalog = listOf(anime("1", 3, null), anime("2", 3, "23:30"), anime("3", 3, "05:00"),
+            anime("4", 2, "10:00"), anime("5", 3, "12:00", listOf("hot")))
+        assertEquals(listOf("3", "2", "1"), UpdateSchedule.day(catalog, 3).map { it.id })
+    }
 }

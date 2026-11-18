@@ -42,6 +42,30 @@ class NativeDataApiTest {
         assertEquals("共 12 集", values[1].episodeLabel)
     }
 
+    @Test fun seasonRowsCarryWeeklyScheduleAndOtherSectionsDoNot() {
+        fun row(id: Int, week: String? = null, time: String? = null) = JSONObject()
+            .put("animeSn", id).put("title", "動畫$id")
+            .put("cover", "https://p2.bahamut.com.tw/$id.jpg").put("videoSn", 0)
+            .put("volume", "第 1 集").put("info", "共 12 集")
+            .apply { if (week != null) put("week", week); if (time != null) put("upTimeHours", time) }
+        val data = JSONObject()
+            .put("newAnime", JSONObject().put("date", JSONArray()
+                .put(row(1, "7", "23:30")).put(row(2, "1", "05:05")).put(row(3, "0", "12:00"))
+                .put(row(4, "2", "24:00")).put(row(5))))
+            .put("hotAnime", JSONArray().put(row(1)))
+            .put("newAdded", JSONArray())
+        val values = NativeCatalogApi.parseCatalog(data).associateBy { it.id }
+        assertEquals(listOf("season", "hot"), values.getValue("1").sections)
+        assertEquals(0, values.getValue("1").updateDay)
+        assertEquals("23:30", values.getValue("1").updateTime)
+        assertEquals(1, values.getValue("2").updateDay)
+        assertEquals("05:05", values.getValue("2").updateTime)
+        assertNull(values.getValue("3").updateDay)
+        assertNull(values.getValue("4").updateTime)
+        assertNull(values.getValue("5").updateDay)
+        assertNull(values.getValue("5").updateTime)
+    }
+
     @Test fun searchMergesBothQueriesAndNeverSendsAccountCookies() {
         val requests = mutableListOf<Response>()
         val session = OfficialHttpSession(openConnection = { uri ->

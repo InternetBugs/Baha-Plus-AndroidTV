@@ -49,9 +49,20 @@ data class Anime(
     val cover: String,
     val episodeLabel: String = "",
     val latestVideoId: String = "",
-    val sections: List<String> = emptyList()
+    val sections: List<String> = emptyList(),
+    /** Taipei weekday of the next episode: 0 Sunday through 6 Saturday. */
+    val updateDay: Int? = null,
+    /** Taipei broadcast time as "HH:mm". */
+    val updateTime: String? = null
 ) {
+    init {
+        require(updateDay == null || updateDay in 0..6)
+        require(updateTime == null || clock.matches(updateTime))
+    }
     companion object {
+        private val clock = Regex("^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+        /** Invalid or absent official times are dropped; the schedule omits them instead of failing. */
+        fun scheduleTime(raw: String): String? = raw.takeIf { clock.matches(it) }
         fun parse(json: JSONObject): Anime {
             val id = json.getString("id")
             val title = json.getString("title").trim()
@@ -59,8 +70,26 @@ data class Anime(
             val video = json.optString("latestVideoId").takeIf { OfficialSite.validId(it) }.orEmpty()
             require(OfficialSite.validId(id) && title.isNotEmpty() && title.length < 500 && OfficialSite.image(cover))
             return Anime(id, title, cover, json.optString("episodeLabel").take(200), video,
-                json.optJSONArray("sections")?.strings().orEmpty())
+                json.optJSONArray("sections")?.strings().orEmpty(),
+                json.optInt("updateDay", -1).takeIf { it in 0..6 },
+                scheduleTime(json.optString("updateTime")))
         }
+    }
+}
+
+/** Anonymous weekly schedule derived from the official "newAnime" rows. */
+object UpdateSchedule {
+    private val taipei = java.util.TimeZone.getTimeZone("GMT+8")
+    /** Today's Taipei weekday, 0 Sunday through 6 Saturday, matching Anime.updateDay. */
+    fun weekday(now: Long = System.currentTimeMillis()): Int {
+        val calendar = java.util.Calendar.getInstance(taipei)
+        calendar.timeInMillis = now
+        return (calendar.get(java.util.Calendar.DAY_OF_WEEK) + 6) % 7
+    }
+    fun day(catalog: List<Anime>, weekday: Int): List<Anime> {
+        require(weekday in 0..6)
+        return catalog.filter { it.updateDay == weekday && "season" in it.sections }
+            .sortedWith(compareBy(nullsLast()) { it.updateTime })
     }
 }
 
