@@ -6,8 +6,11 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class NativeDataApiTest {
     private class Response(val uri: URI, val body: String, val status: Int = 200,
@@ -76,6 +79,68 @@ class NativeDataApiTest {
         assertEquals(2, requests.size)
         assertTrue(requests.all { it.getRequestProperty("Cookie") == null && !it.instanceFollowRedirects })
         assertTrue(requests.all { it.disconnected })
+    }
+
+    @Test fun catalogRetriesTransientTransportAndServerErrorsWithFreshConnections() {
+        val responses = mutableListOf<Response>()
+        var attempts = 0
+        val payload = """{"data":{"newAnime":{"date":[{"animeSn":1,"videoSn":10,"title":"動畫1",
+          "cover":"https://p2.bahamut.com.tw/1.jpg","volume":"第 1 集","week":"1","upTimeHours":"22:00"}]},
+          "hotAnime":[],"newAdded":[]}}"""
+        val session = OfficialHttpSession(retryDelayMs = 0L, openConnection = { uri ->
+            attempts++
+            when (attempts) {
+                1 -> throw IOException("Connection reset")
+                2 -> Response(uri, "", status = 522).also { responses += it }
+                else -> Response(uri, payload).also { responses += it }
+            }
+        })
+        val items = NativeCatalogApi(session).catalog()
+        assertEquals(listOf("1"), items.map { it.id })
+        assertEquals(3, attempts)
+        assertEquals(listOf("close", "close"), responses.map { it.getRequestProperty("Connection") })
+        assertTrue(responses.all { it.disconnected })
+    }
+
+    @Test fun catalogDoesNotRetryHttp403AndAllowsMissingOptionalSections() {
+        var attempts = 0
+        val forbidden = OfficialHttpSession(retryDelayMs = 0L, openConnection = { uri ->
+            attempts++
+            Response(uri, "blocked", status = 403)
+        })
+        assertEquals("http-403", assertThrows(NativeApiException::class.java) {
+            NativeCatalogApi(forbidden).catalog()
+        }.code)
+        assertEquals(1, attempts)
+
+        val row = JSONObject().put("animeSn", 1).put("title", "動畫1")
+            .put("cover", "https://p2.bahamut.com.tw/1.jpg").put("videoSn", 10)
+        val data = JSONObject()
+            .put("newAnime", JSONObject().put("date", JSONArray().put(row)))
+            .put("hotAnime", JSONObject.NULL)
+        val items = NativeCatalogApi.parseCatalog(data)
+        assertEquals(listOf("1"), items.map { it.id })
+        assertEquals(listOf("season"), items.single().sections)
+    }
+
+    @Test fun closingSessionWakesRetryBackoffImmediately() {
+        val enteredBackoff = CountDownLatch(1)
+        val session = OfficialHttpSession(retryDelayMs = 30_000L, openConnection = {
+            enteredBackoff.countDown()
+            throw IOException("transient reset")
+        })
+        var failure: Throwable? = null
+        val done = CountDownLatch(1)
+        val worker = Thread {
+            failure = runCatching { NativeCatalogApi(session).catalog() }.exceptionOrNull()
+            done.countDown()
+        }
+        worker.start()
+        assertTrue(enteredBackoff.await(2, TimeUnit.SECONDS))
+        Thread.sleep(50)
+        session.close()
+        assertTrue(done.await(2, TimeUnit.SECONDS))
+        assertEquals("session-stale", (failure as? NativeApiException)?.code)
     }
 
     @Test fun invalidCatalogImagesAndOversizedSearchListsFail() {

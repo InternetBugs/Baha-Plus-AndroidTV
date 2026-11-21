@@ -2,19 +2,20 @@ package app.bahaplus.tv.data
 
 import app.bahaplus.tv.core.Anime
 import app.bahaplus.tv.core.OfficialSite
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Anonymous App catalog and public search endpoints, shared by every normal build. */
 internal class NativeCatalogApi(private val session: OfficialHttpSession) {
     fun catalog(): List<Anime> = parseCatalog(session.json(
-        "${OfficialHttpSession.API}/mobile_app/anime/v4/index.php").getJSONObject("data"))
+        "${OfficialHttpSession.API}/mobile_app/anime/v4/index.php", retries = 2).getJSONObject("data"))
 
     fun search(queries: List<String>): List<Anime> {
         require(queries.size in 1..2 && queries.all { it.isNotBlank() && it.codePointCount(0, it.length) <= 100 })
         val results = linkedMapOf<String, Anime>()
         for (keyword in queries.distinct()) {
             parseSearch(session.json("${OfficialHttpSession.API}/anime/v1/search.php",
-                mapOf("kw" to keyword)).getJSONObject("data")).forEach { results[it.id] = it }
+                mapOf("kw" to keyword), retries = 1).getJSONObject("data")).forEach { results[it.id] = it }
         }
         require(results.size <= 5000)
         return results.values.toList()
@@ -23,9 +24,11 @@ internal class NativeCatalogApi(private val session: OfficialHttpSession) {
     companion object {
         fun parseCatalog(data: JSONObject): List<Anime> {
             val results = linkedMapOf<String, Anime>()
+            val hot = if (data.isNull("hotAnime")) JSONArray() else data.getJSONArray("hotAnime")
+            val added = if (data.isNull("newAdded")) JSONArray() else data.getJSONArray("newAdded")
             for ((section, rows) in listOf(
                 "season" to data.getJSONObject("newAnime").getJSONArray("date"),
-                "hot" to data.getJSONArray("hotAnime"), "new" to data.getJSONArray("newAdded"))) {
+                "hot" to hot, "new" to added)) {
                 require(rows.length() <= 5000)
                 for (index in 0 until rows.length()) {
                     val row = rows.getJSONObject(index)

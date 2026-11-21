@@ -89,6 +89,9 @@ class MainActivity : Activity() {
     private var accountSynced = false
     private var lastError = ""
     private var busy = true
+    private var catalogLoading = false
+    private var catalogFailed = false
+    private var activityPaused = false
     private val detailLoader = AnimeDetailLoader(deliver = { handler.post(it) })
     private val ratingLoader = AnimeDetailLoader(deliver = { handler.post(it) })
     private var ratingView: AnimeRatingView? = null
@@ -905,11 +908,21 @@ class MainActivity : Activity() {
 
     private fun loadCatalog() {
         busy = true
+        catalogLoading = true
+        catalogFailed = false
         catalogLoader.load(OfficialHttpSession(), { NativeCatalogApi(it).catalog() }) { result ->
             busy = false
-            result.onSuccess { catalog = it }
+            catalogLoading = false
+            result.onSuccess {
+                catalog = it
+                catalogFailed = false
+            }.onFailure {
+                catalogFailed = true
+            }
             if (!detailsOpen && (tab == "home" || tab == "schedule")) render()
-            result.exceptionOrNull()?.let(::nativeRequestError)
+            result.exceptionOrNull()?.let { error ->
+                if (!activityPaused) nativeRequestError(error)
+            }
         }
     }
 
@@ -1237,13 +1250,20 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         Diagnostics.record("app.resumed")
+        activityPaused = false
         updateUiResumed = true
         handler.post(presentUpdateResult)
         if (portalAvailable) portal.foreground(true)
         native?.resumeLifecycle()
+        if ((catalogFailed || catalog.isEmpty()) && !catalogLoading &&
+            playingVideo.isEmpty() && qrLoginView == null && diagnosticsView == null) {
+            loadCatalog()
+            if (!detailsOpen && (tab == "home" || tab == "schedule")) render()
+        }
     }
     override fun onPause() {
         Diagnostics.record("app.paused")
+        activityPaused = true
         updateUiResumed = false
         native?.pauseForLifecycle()
         if (portalAvailable) portal.foreground(false)

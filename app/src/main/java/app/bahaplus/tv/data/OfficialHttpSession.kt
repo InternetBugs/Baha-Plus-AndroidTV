@@ -4,6 +4,7 @@ import app.bahaplus.tv.core.OfficialSite
 import app.bahaplus.tv.experiment.GuestCookieJar
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLDecoder
@@ -14,11 +15,12 @@ internal class OfficialHttpSession(
     cookieHeaders: Map<String, String> = emptyMap(),
     private val isCurrent: () -> Boolean = { true },
     private val openConnection: (URI) -> HttpURLConnection = { it.toURL().openConnection() as HttpURLConnection },
-    private val loginCookies: OfficialLoginCookies? = null
+    private val loginCookies: OfficialLoginCookies? = null,
+    private val retryDelayMs: Long = 250L
 ) : AutoCloseable {
     private val cookies = GuestCookieJar()
     private val rotationEpoch = loginCookies?.rotationEpoch()
-    private val lock = Any()
+    private val lock = Object()
     @Volatile private var closed = false
     private var connection: HttpURLConnection? = null
 
@@ -30,14 +32,14 @@ internal class OfficialHttpSession(
         if (closed || Thread.currentThread().isInterrupted || !isCurrent()) throw NativeApiException("session-stale")
     }
 
-    fun json(path: String, args: Map<String, String> = emptyMap()): JSONObject {
-        val body = JSONObject(get(path, args))
+    fun json(path: String, args: Map<String, String> = emptyMap(), retries: Int = 0): JSONObject {
+        val body = JSONObject(get(path, args, retries))
         if (!body.isNull("error")) throw NativeApiException("official-rejected")
         return body
     }
 
-    fun get(path: String, args: Map<String, String> = emptyMap()): String =
-        request(endpoint(path, args), null)
+    fun get(path: String, args: Map<String, String> = emptyMap(), retries: Int = 0): String =
+        requestWithRetries(endpoint(path, args), retries)
 
     fun post(path: String, fields: Map<String, String>): String =
         request(endpoint(path), encode(fields))
@@ -59,11 +61,48 @@ internal class OfficialHttpSession(
             ?.takeIf { it.isNotEmpty() && it.length <= 200 }
     }
 
-    private fun request(uri: URI, body: String?): String {
+    private fun requestWithRetries(uri: URI, retries: Int): String {
+        var attempt = 0
+        while (true) {
+            try {
+                return request(uri, null, closeConnection = attempt > 0)
+            } catch (error: NativeApiException) {
+                if (attempt >= retries || !isRetryable(error.code)) throw error
+                checkCurrent()
+                val delay = retryDelayMs * if (attempt == 0) 1L else 3L
+                if (delay > 0L) waitRetry(delay)
+                checkCurrent()
+                attempt++
+            }
+        }
+    }
+
+    private fun waitRetry(delayMs: Long) {
+        val deadline = System.nanoTime() + delayMs * 1_000_000L
+        synchronized(lock) {
+            while (!closed && !Thread.currentThread().isInterrupted && isCurrent()) {
+                val remainingMs = (deadline - System.nanoTime() + 999_999L) / 1_000_000L
+                if (remainingMs <= 0L) break
+                try {
+                    lock.wait(remainingMs)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw NativeApiException("session-stale")
+                }
+            }
+        }
+    }
+
+    private fun request(uri: URI, body: String?, closeConnection: Boolean = false): String {
         require(uri.scheme == "https" && uri.host in HOSTS && uri.port in setOf(-1, 443) &&
             uri.userInfo == null && uri.fragment == null)
         checkCurrent()
-        val request = openConnection(uri)
+        val request = try {
+            openConnection(uri)
+        } catch (_: IOException) {
+            checkCurrent()
+            throw NativeApiException("network")
+        }
         synchronized(lock) {
             if (closed) { request.disconnect(); throw NativeApiException("session-stale") }
             connection = request
@@ -76,6 +115,7 @@ internal class OfficialHttpSession(
             request.setRequestProperty("User-Agent", OfficialSite.USER_AGENT)
             request.setRequestProperty("Referer", "$WEB/")
             request.setRequestProperty("Origin", WEB)
+            if (closeConnection) request.setRequestProperty("Connection", "close")
             val sentCookies = cookies.header(uri)
             if (sentCookies.isNotEmpty()) request.setRequestProperty("Cookie", sentCookies)
             if (body != null) {
@@ -130,6 +170,7 @@ internal class OfficialHttpSession(
     override fun close() {
         val pending = synchronized(lock) {
             closed = true
+            lock.notifyAll()
             connection.also { connection = null }
         }
         pending?.disconnect()
@@ -141,6 +182,14 @@ internal class OfficialHttpSession(
         const val API = "https://api.gamer.com.tw"
         private const val MAX_BYTES = 2_000_000
         private val HOSTS = setOf("ani.gamer.com.tw", "api.gamer.com.tw")
+        private fun isRetryable(code: String): Boolean {
+            if (code == "network" || code == "http-429") return true
+            if (code.startsWith("http-")) {
+                val status = code.removePrefix("http-").toIntOrNull()
+                if (status != null && status in 500..599) return true
+            }
+            return false
+        }
         private fun encode(values: Map<String, String>) = values.entries.joinToString("&") {
             URLEncoder.encode(it.key, "UTF-8") + "=" + URLEncoder.encode(it.value, "UTF-8")
         }
