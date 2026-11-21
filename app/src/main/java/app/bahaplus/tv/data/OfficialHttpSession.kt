@@ -1,6 +1,5 @@
 package app.bahaplus.tv.data
 
-import android.webkit.CookieManager
 import app.bahaplus.tv.core.OfficialSite
 import app.bahaplus.tv.experiment.GuestCookieJar
 import org.json.JSONObject
@@ -14,9 +13,11 @@ import java.net.URLEncoder
 internal class OfficialHttpSession(
     cookieHeaders: Map<String, String> = emptyMap(),
     private val isCurrent: () -> Boolean = { true },
-    private val openConnection: (URI) -> HttpURLConnection = { it.toURL().openConnection() as HttpURLConnection }
+    private val openConnection: (URI) -> HttpURLConnection = { it.toURL().openConnection() as HttpURLConnection },
+    private val loginCookies: OfficialLoginCookies? = null
 ) : AutoCloseable {
     private val cookies = GuestCookieJar()
+    private val rotationEpoch = loginCookies?.rotationEpoch()
     private val lock = Any()
     @Volatile private var closed = false
     private var connection: HttpURLConnection? = null
@@ -75,7 +76,8 @@ internal class OfficialHttpSession(
             request.setRequestProperty("User-Agent", OfficialSite.USER_AGENT)
             request.setRequestProperty("Referer", "$WEB/")
             request.setRequestProperty("Origin", WEB)
-            cookies.header(uri).takeIf { it.isNotEmpty() }?.let { request.setRequestProperty("Cookie", it) }
+            val sentCookies = cookies.header(uri)
+            if (sentCookies.isNotEmpty()) request.setRequestProperty("Cookie", sentCookies)
             if (body != null) {
                 request.requestMethod = "POST"
                 request.doOutput = true
@@ -84,7 +86,8 @@ internal class OfficialHttpSession(
                 request.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
             val status = request.responseCode
-            cookies.receive(uri, request.headerFields)
+            val responseHeaders = request.headerFields
+            cookies.receive(uri, responseHeaders)
             if (status in 300..399) {
                 val target = runCatching { uri.resolve(request.getHeaderField("Location").orEmpty()) }.getOrNull()
                 val login = target?.scheme == "https" && target.host == "user.gamer.com.tw" &&
@@ -109,6 +112,9 @@ internal class OfficialHttpSession(
                 throw NativeApiException("verification-required")
             }
             checkCurrent()
+            loginCookies?.persist(rotationEpoch, uri, sentCookies, responseHeaders) {
+                !closed && !Thread.currentThread().isInterrupted && isCurrent()
+            }
             return text
         } catch (error: NativeApiException) {
             throw error
@@ -135,10 +141,6 @@ internal class OfficialHttpSession(
         const val API = "https://api.gamer.com.tw"
         private const val MAX_BYTES = 2_000_000
         private val HOSTS = setOf("ani.gamer.com.tw", "api.gamer.com.tw")
-        fun snapshotCookies(): Map<String, String> = runCatching {
-            val manager = CookieManager.getInstance()
-            HOSTS.associateWith { manager.getCookie("https://$it/").orEmpty() }
-        }.getOrDefault(emptyMap())
         private fun encode(values: Map<String, String>) = values.entries.joinToString("&") {
             URLEncoder.encode(it.key, "UTF-8") + "=" + URLEncoder.encode(it.value, "UTF-8")
         }

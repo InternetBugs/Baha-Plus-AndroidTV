@@ -1,5 +1,7 @@
 package app.bahaplus.tv.experiment
 
+import app.bahaplus.tv.data.OfficialHttpSession
+import app.bahaplus.tv.data.OfficialLoginCookies
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.ByteArrayInputStream
@@ -7,12 +9,14 @@ import java.net.HttpURLConnection
 import java.net.URI
 
 class NativeApiClientTest {
-    private class Response(uri: URI, private val body: String) : HttpURLConnection(uri.toURL()) {
+    private class Response(uri: URI, private val body: String,
+        private val setCookie: String? = null) : HttpURLConnection(uri.toURL()) {
         override fun connect() {}
         override fun disconnect() {}
         override fun usingProxy() = false
         override fun getResponseCode() = 200
-        override fun getHeaderFields(): Map<String?, List<String>> = emptyMap()
+        override fun getHeaderFields(): Map<String?, List<String>> =
+            setCookie?.let { mapOf("Set-Cookie" to listOf(it)) } ?: emptyMap()
         override fun getInputStream() = ByteArrayInputStream(body.toByteArray())
         override fun getContentLength() = -1
     }
@@ -50,6 +54,40 @@ class NativeApiClientTest {
         assertTrue(connections.all { it.getRequestProperty("Cookie") == "account=private" })
         assertTrue(connections.all { !it.instanceFollowRedirects })
         session.close()
+    }
+
+    @Test fun accountAndPlaybackSessionsShareOfficialLoginRotations() {
+        val token = "BAHA" + "RUNE"
+        var browser = "BAHAID=owner; $token=initial"
+        val writes = mutableListOf<String>()
+        val store = OfficialLoginCookies(readCookie = { browser }, writeCookie = { _, header ->
+            writes += header
+            browser = "BAHAID=owner; ${header.substringBefore(';')}"
+        })
+        val attributes = "; Domain=gamer.com.tw; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600"
+        OfficialHttpSession(store.snapshot(), openConnection = { uri ->
+            Response(uri, "{}", "$token=after-account$attributes")
+        }, loginCookies = store).use { it.get("${OfficialHttpSession.WEB}/mygather.php") }
+
+        fun episode(rotation: String?): List<String> {
+            val requests = mutableListOf<Response>()
+            NativeApiClient(store.snapshot(), isCurrent = { true }, openConnection = { uri ->
+                Response(uri, body(uri.path, false), rotation.takeIf { requests.isEmpty() })
+                    .also { requests += it }
+            }, loginCookies = store) { _, _ -> }.use { it.prepare("10") }
+            return requests.map { it.getRequestProperty("Cookie") }
+        }
+        val playback = episode("$token=after-playback$attributes")
+        assertTrue(playback.first().contains("$token=after-account"))
+        assertTrue(playback.drop(1).all { it.contains("$token=after-playback") })
+        assertTrue(episode(null).all { it.contains("$token=after-playback") })
+
+        lateinit var account: Response
+        OfficialHttpSession(store.snapshot(), openConnection = { uri ->
+            Response(uri, "{}").also { account = it }
+        }, loginCookies = store).use { it.get("${OfficialHttpSession.WEB}/mygather.php") }
+        assertTrue(account.getRequestProperty("Cookie").contains("$token=after-playback"))
+        assertEquals(listOf("$token=after-account$attributes", "$token=after-playback$attributes"), writes)
     }
 
     @Test fun sourceStaysGatedUntilConsentAndRealAdEventsComplete() {

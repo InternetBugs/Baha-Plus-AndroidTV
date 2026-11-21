@@ -27,6 +27,7 @@ class OfficialPortal(
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val requests = mutableSetOf<String>()
+    private val loginOwner = Any()
     private var document = ""
     private var destroyed = false
     private var ready = false
@@ -141,6 +142,7 @@ class OfficialPortal(
 
     fun qrLogin() {
         if (destroyed) return
+        OfficialLoginCookies.webView.beginLogin(loginOwner)
         cancelQrLogin()
         ready = false
         webView.loadUrl(OfficialSite.HOME)
@@ -149,6 +151,7 @@ class OfficialPortal(
     fun refreshQrLogin() {
         if (destroyed) return
         if (!ready || !OfficialSite.trusted(webView.url.orEmpty())) { qrLogin(); return }
+        OfficialLoginCookies.webView.beginLogin(loginOwner)
         cancelQrLogin()
         evaluate("window.__bahaMediaSuspended=${!foreground};")
         qrRequest = run(script("qr-login"))
@@ -158,6 +161,7 @@ class OfficialPortal(
         if (destroyed) return
         cancelQrLogin()
         CookieManager.getInstance().flush()
+        OfficialLoginCookies.webView.endLogin(loginOwner)
         emit("login-complete")
     }
 
@@ -167,7 +171,6 @@ class OfficialPortal(
         evaluate("if(window.__bahaQrLogin)window.__bahaQrLogin.dispose();")
     }
 
-    fun logout(after: () -> Unit) = Companion.logout(after)
     fun foreground(active: Boolean) {
         foreground = active
         if (destroyed) return
@@ -185,6 +188,7 @@ class OfficialPortal(
         requests.clear()
         webView.stopLoading()
         webView.destroy()
+        OfficialLoginCookies.webView.endLogin(loginOwner)
     }
 
     private fun schedulePoll() {
@@ -258,11 +262,14 @@ class OfficialPortal(
         private fun quote(value: String) = JSONObject.quote(value)
         fun decodeString(raw: String): String? = runCatching { JSONArray("[$raw]").opt(0) as? String }.getOrNull()
         fun logout(after: () -> Unit) {
-            CookieManager.getInstance().removeAllCookies {
-                CookieManager.getInstance().flush()
-                android.webkit.WebStorage.getInstance().deleteAllData()
-                after()
-            }
+            OfficialLoginCookies.webView.clear(remove = { done ->
+                val manager = CookieManager.getInstance()
+                manager.removeAllCookies {
+                    manager.flush()
+                    android.webkit.WebStorage.getInstance().deleteAllData()
+                    done()
+                }
+            }, after = after)
         }
     }
 }

@@ -3,6 +3,7 @@ package app.bahaplus.tv.experiment
 import app.bahaplus.tv.core.Danmaku
 import app.bahaplus.tv.core.OfficialSite
 import app.bahaplus.tv.data.NativeDanmakuParser
+import app.bahaplus.tv.data.OfficialLoginCookies
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URI
@@ -10,17 +11,26 @@ import java.net.URLEncoder
 import java.util.UUID
 
 /** Native playback protocol. Defaults to an isolated guest; normal entry injects a cookie snapshot. */
-class NativeApiClient(
-    initialCookies: Map<String, String> = emptyMap(),
-    private val isCurrent: () -> Boolean = { true },
+class NativeApiClient internal constructor(
+    initialCookies: Map<String, String>,
+    private val isCurrent: () -> Boolean,
     private val openConnection: (URI) -> HttpURLConnection = { it.toURL().openConnection() as HttpURLConnection },
+    private val loginCookies: OfficialLoginCookies?,
     private val event: (String, Int?) -> Unit
 ) : AutoCloseable {
+    constructor(
+        initialCookies: Map<String, String> = emptyMap(),
+        isCurrent: () -> Boolean = { true },
+        openConnection: (URI) -> HttpURLConnection = { it.toURL().openConnection() as HttpURLConnection },
+        event: (String, Int?) -> Unit
+    ) : this(initialCookies, isCurrent, openConnection, null, event)
+
     companion object {
         const val WEB = "https://ani.gamer.com.tw"
         const val API = "https://api.gamer.com.tw"
     }
     private val cookies = GuestCookieJar()
+    private val rotationEpoch = loginCookies?.rotationEpoch()
     private val lock = Any()
     @Volatile private var connection: HttpURLConnection? = null
     @Volatile private var closed = false
@@ -152,14 +162,15 @@ class NativeApiClient(
             request.setRequestProperty("User-Agent", OfficialSite.USER_AGENT)
             request.setRequestProperty("Referer", "$WEB/animeVideo.php?sn=$video")
             request.setRequestProperty("Origin", WEB)
-            if (uri.host != "i2.bahamut.com.tw") {
-                cookies.header(uri).takeIf { it.isNotEmpty() }?.let { request.setRequestProperty("Cookie", it) }
-            }
+            val official = uri.host != "i2.bahamut.com.tw"
+            val sentCookies = if (official) cookies.header(uri) else ""
+            if (sentCookies.isNotEmpty()) request.setRequestProperty("Cookie", sentCookies)
             val status = request.responseCode
             checkCurrent()
             event(stage, status)
-            if (uri.host != "i2.bahamut.com.tw") {
-                cookies.receive(uri, request.headerFields)
+            val responseHeaders = if (official) request.headerFields else emptyMap()
+            if (official) {
+                cookies.receive(uri, responseHeaders)
                 if (stage == "device") {
                     event("guest-cookie-count", cookies.count)
                     event("guest-sign-present", if (cookies.contains("ANIME_SIGN")) 1 else 0)
@@ -171,6 +182,9 @@ class NativeApiClient(
             val body = bytes.toString(Charsets.UTF_8)
             if (body.contains("challenge-platform") || body.contains("cf-chl-")) throw ApiFailure("verification-required")
             checkCurrent()
+            if (official) loginCookies?.persist(rotationEpoch, uri, sentCookies, responseHeaders) {
+                !closed && !Thread.currentThread().isInterrupted && isCurrent()
+            }
             return body
         } catch (error: ApiFailure) {
             throw error

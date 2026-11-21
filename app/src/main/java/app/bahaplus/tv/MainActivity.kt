@@ -768,8 +768,9 @@ class MainActivity : Activity() {
         playerLayer.visibility = View.VISIBLE
         val current = playingVideo
         val revision = accountRevision
-        val session = NativeApiClient(OfficialHttpSession.snapshotCookies(),
-            isCurrent = { !activityDestroyed && accountRevision == revision }) { stage, status ->
+        val loginCookies = OfficialLoginCookies.webView
+        val session = NativeApiClient(loginCookies.snapshot(),
+            isCurrent = { !activityDestroyed && accountRevision == revision }, loginCookies = loginCookies) { stage, status ->
             if (status != null && status in 100..599) {
                 Diagnostics.record("player.http", "phase" to stage, "httpStatus" to status)
             }
@@ -847,7 +848,7 @@ class MainActivity : Activity() {
     }
 
     private fun login() {
-        if (loginOpening || qrLoginView != null) return
+        if (loginOpening || qrLoginView != null || OfficialLoginCookies.webView.isClearing()) return
         loginOpening = true
         Diagnostics.record("account.login")
         retireAccountRequests()
@@ -881,12 +882,11 @@ class MainActivity : Activity() {
                 syncAccount()
             }.setNegativeButton(tr("退出登录", "登出")) { _, _ ->
                 retireAccountRequests()
-                val clear = {
+                releasePortal()
+                OfficialPortal.logout {
                     clearAccount()
-                    releasePortal()
                     render()
                 }
-                if (portalAvailable) portal.logout(clear) else OfficialPortal.logout(clear)
             }.setNeutralButton(tr("返回", "返回"), null).show()
     }
     private fun updateAccount() {
@@ -913,15 +913,15 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun accountSession(cookies: Map<String, String> = OfficialHttpSession.snapshotCookies()): OfficialHttpSession {
+    private fun accountSession(cookies: Map<String, String> = OfficialLoginCookies.webView.snapshot()): OfficialHttpSession {
         val revision = accountRevision
         return OfficialHttpSession(cookies,
-            isCurrent = { !activityDestroyed && revision == accountRevision })
+            isCurrent = { !activityDestroyed && revision == accountRevision }, loginCookies = OfficialLoginCookies.webView)
     }
 
     private fun syncAccount(afterLogin: Boolean = false) {
         if (favoritePending) return
-        val cookies = OfficialHttpSession.snapshotCookies()
+        val cookies = OfficialLoginCookies.webView.snapshot()
         if (cookies.values.all { it.isBlank() }) {
             accountLoader.cancel()
             clearAccount()
@@ -1018,7 +1018,6 @@ class MainActivity : Activity() {
                 portal.completeQrLogin()
             }
             "login-complete" -> {
-                android.webkit.CookieManager.getInstance().flush()
                 syncAccount(afterLogin = true)
             }
             "operation-error", "navigation-error", "verification-required" -> qrLoginView?.error()
