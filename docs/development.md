@@ -13,19 +13,21 @@ Gradle Wrapper 固定为 8.14.3，并校验分发包。应用最低系统为 And
 
 ## 配置 Android SDK
 
-已有 SDK 时，在项目根目录新建不提交的 `local.properties`，根据实际安装位置填写：
+项目使用本机已安装的 Android SDK，不在源码目录建立专用副本。将 `ANDROID_HOME`（或 `ANDROID_SDK_ROOT`）指向该 SDK，并在项目根目录写入不提交的 `local.properties`：
 
 ```properties
 sdk.dir=D\:/Android/Sdk
 ```
 
-需要下载项目专用 SDK 时，先审阅 [初始化脚本](../tools/Bootstrap-Android.ps1)，再在项目根目录执行：
+需要补齐 Platform 36 或 Build Tools 35.0.0 时，先审阅 [初始化脚本](../tools/Bootstrap-Android.ps1)，再执行：
 
 ```powershell
 .\tools\Bootstrap-Android.ps1
 ```
 
-脚本从 Google 官方源下载并校验命令行工具，在 `.tools/android-sdk` 下安装编译所需组件，并在终端提示 SDK 许可。明确接受这些许可后，可使用 `-AcceptSdkLicenses` 自动回答。脚本不修改系统 PATH，不创建系统任务。
+脚本只操作 `ANDROID_HOME` 指向的现有 SDK：缺失组件通过其中的 `sdkmanager` 安装，并在终端提示许可；明确接受这些许可后，可用 `-AcceptSdkLicenses` 自动回答。脚本不下载或复制第二份 SDK，不修改系统 PATH，不创建系统任务。
+
+模拟器同样使用本机全局安装，不再创建项目专用 AVD 或模拟器数据目录。[`tools/Start-Emulator.ps1`](../tools/Start-Emulator.ps1) 启动全局 AVD 并自动注入宿主机代理、修复访客未关联 wifi 导致的断网；启动与操作方式见 [模拟器验证](emulator-validation.md#本机复现)。
 
 ## 本地构建
 
@@ -36,7 +38,7 @@ npm ci --ignore-scripts
 .\tools\Build.ps1
 ```
 
-构建脚本执行 `testDebugUnitTest lintDebug assembleDebug`，将调试 APK 与 SHA-256 复制到 `artifacts/`。优先使用已有 Gradle 分发包；构建缓存和 Android 用户目录放在项目 `.tools/` 下。
+构建脚本执行 `testDebugUnitTest lintDebug assembleDebug`，将调试 APK 与 SHA-256 复制到 `artifacts/`，文件名取 APK 实际的版本名。优先使用已有 Gradle 分发包；Gradle 与 Android 用户目录使用当前用户的默认位置（`~/.gradle`、`~/.android`）。
 
 依赖与工具已缓存时，可以使用：
 

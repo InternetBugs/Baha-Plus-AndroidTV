@@ -15,8 +15,10 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from android_env import adb
+
 ROOT = Path(__file__).resolve().parent.parent
-ADB = ROOT / ".tools/android-sdk/platform-tools/adb.exe"
 PACKAGE = "app.bahaplus.tv"
 OUTPUT = ROOT / "artifacts/performance"
 sys.stdout.reconfigure(encoding="utf-8")
@@ -29,7 +31,7 @@ class Probe:
             raise ValueError("Only an explicitly selected local emulator is allowed")
         if not 1024 <= port <= 65535:
             raise ValueError("Invalid ADB server port")
-        self.prefix = [str(ADB), "-P", str(port), "-s", serial]
+        self.prefix = [adb(), "-P", str(port), "-s", serial]
         self.serial = serial
         actual = self.run("shell", "getprop", "ro.kernel.qemu.avd_name").strip()
         if not actual:
@@ -244,11 +246,10 @@ def main():
                   "virtual_cores": probe.run("shell", "getconf", "_NPROCESSORS_ONLN").strip(),
                   "webview": probe.run("shell", "dumpsys", "webviewupdate"),
                   "apks": {}}
-        for apk in (OUTPUT / "baseline-debug.apk", ROOT / "artifacts/BahaPlusTV-0.1.0-debug.apk"):
-            if apk.is_file():
-                result["apks"][apk.name] = {
-                    "bytes": apk.stat().st_size,
-                    "sha256": hashlib.sha256(apk.read_bytes()).hexdigest()}
+        for apk in sorted((ROOT / "artifacts").glob("BahaPlusTV-*-debug.apk")):
+            result["apks"][apk.name] = {
+                "bytes": apk.stat().st_size,
+                "sha256": hashlib.sha256(apk.read_bytes()).hexdigest()}
         probe.save(args.label, result)
     elif args.command == "errors":
         crash = probe.run("logcat", "-b", "crash", "-d")

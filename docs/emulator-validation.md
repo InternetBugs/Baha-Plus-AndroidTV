@@ -2,7 +2,7 @@
 
 执行日期：2026-11-12 至 2026-11-13，Asia/Taipei。
 
-本记录随源码上传。截图、UI 树、内存输出和运行日志保存在本机 `artifacts/emulator/`，不纳入仓库；下文的本机路径用于查找已有证据，远端读者可使用文末命令自行复现。
+本记录随源码上传，是历史测试报告。当时的截图、UI 树、内存输出和运行日志保存在本机 `artifacts/emulator/`，不纳入仓库；项目专用 SDK／AVD 副本与这些本地证据已在 2026-11-22 的清理中删除，下文的本机路径只作为记录，不再指向现存文件。复现请使用文末的本机复现步骤，它们基于本机全局安装的 SDK 与 AVD。
 
 测试使用实际官方内容和访客会话。应用操作由 ADB 发送方向、确认、返回按键完成；搜索文本通过电视软键盘输入。官方年龄按钮通过应用内遥控光标点击。未使用触屏坐标注入、预置搜索文本或伪造登录、授权和进度。
 
@@ -82,23 +82,28 @@ UIAutomator 在动态 WebView 广告树上出现过 `AccessibilityNodeInfoDumper
 
 ## 本机复现
 
-项目专用 SDK 和 AVD 位于 `.tools/`，不会进入源码提交。启动时将 `ANDROID_HOME`／`ANDROID_SDK_ROOT` 指向 `.tools/android-sdk`，`ANDROID_AVD_HOME` 指向 `.tools/avd`，`ANDROID_EMULATOR_HOME` 指向 `.tools/emulator-home`。本次 ADB 使用 `.tools/emulator-home/adbkey` 对应的测试密钥，不应导出或提交密钥内容。
+模拟器使用本机全局安装的 Android SDK 与 AVD，不在源码目录建立专用副本。`ANDROID_HOME` 指向已安装 SDK（本机为 `D:\Android\Sdk`），AVD 位于 `%USERPROFILE%\.android\avd`，由 `avdmanager` 与 `emulator -avd` 管理。本机现有电视 AVD 为 `T3_AndroidTV_API30`（Android TV 11／API 30、32 位 x86、`tv_1080p`）。
 
 ```powershell
-$env:ANDROID_HOME = Join-Path $PWD '.tools/android-sdk'
-$env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
-$env:ANDROID_AVD_HOME = Join-Path $PWD '.tools/avd'
-$env:ANDROID_EMULATOR_HOME = Join-Path $PWD '.tools/emulator-home'
-$env:ANDROID_USER_HOME = $env:ANDROID_EMULATOR_HOME
-$env:ADB_VENDOR_KEYS = Join-Path $env:ANDROID_EMULATOR_HOME 'adbkey'
-
-& "$env:ANDROID_HOME/emulator/emulator.exe" -avd BahaPlusTV_API30 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -feature -Vulkan -memory 2048 -cores 4 -no-metrics
+$env:ANDROID_HOME = 'D:\Android\Sdk'
+.\tools\Start-Emulator.ps1
 ```
 
-在另一终端安装并操作：
+`Start-Emulator.ps1` 只启动已存在的全局 AVD，并做两件事，缺一都会让首页显示「首页暂不可用」：
+
+- 代理：读取 `https_proxy`／Windows Internet 设置中的系统代理，以 `-http-proxy` 注入，客户端随后读到的全局代理为 `10.0.2.2:<port>`。Mihomo TUN 下模拟器直接出站会被中断，必须走这条代理。
+- 网络：部分启动后 wifi 未关联，访客拿不到默认路由（`ip route` 只有 `10.0.2.0/24`），此时任何请求都报 `Network is unreachable`。脚本未关联时执行 `cmd wifi connect-network AndroidWifi open`，并等到 `dumpsys connectivity` 出现 `VALIDATED` 才返回。
+
+脚本幂等：目标端口已有设备时直接返回该 serial；成功后输出 serial、注入的代理，以及安装命令提示。需要图形窗口时加 `-Windowed`，需要绕过代理时加 `-NoProxy`。手动等价启动：
 
 ```powershell
-& '.\.tools\android-sdk\platform-tools\adb.exe' -s emulator-5554 install -r artifacts/BahaPlusTV-0.1.0-debug.apk
+& "$env:ANDROID_HOME/emulator/emulator.exe" -avd T3_AndroidTV_API30 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -memory 2048 -cores 4 -http-proxy http://127.0.0.1:7890
+```
+
+在另一终端安装并操作。辅助脚本从 `ANDROID_HOME` 解析 `adb`；`emulator-inspect.py` 未指定 `--serial` 时要求恰好一台已连接的模拟器，因此不会误操作其他设备：
+
+```powershell
+& "$env:ANDROID_HOME/platform-tools/adb.exe" install -r artifacts/BahaPlusTV-0.4.3-debug.apk
 python tools/emulator-inspect.py launch
 python tools/emulator-inspect.py keys DPAD_RIGHT DPAD_CENTER
 python tools/emulator-inspect.py capture example
@@ -106,7 +111,7 @@ python tools/emulator-inspect.py capture video-example --screenshot-only
 python tools/emulator-inspect.py stats sample
 ```
 
-辅助工具只操作显式指定的 `emulator-*` 设备，截图／XML／摘要写入 `artifacts/emulator/`。统计只保存内存及错误计数，不保存可能带会话 URL 的原始 logcat。
+辅助工具只操作显式指定的 `emulator-*` 设备，截图／XML／摘要写入忽略的 `artifacts/emulator/`。统计只保存内存及错误计数，不保存可能带会话 URL 的原始 logcat。
 
 本机 Mihomo TUN 环境下，模拟器直接出站曾发生 `ERR_CONNECTION_CLOSED`。测试临时让 AVD 使用宿主机已经存在的代理入口 `10.0.2.2:7890`；未更改宿主机代理配置。其他电脑应使用其正常可访问官方服务的网络条件。
 
@@ -115,11 +120,11 @@ python tools/emulator-inspect.py stats sample
 清理命令：
 
 ```powershell
-& '.\.tools\android-sdk\platform-tools\adb.exe' -s emulator-5554 shell settings put global http_proxy :0
-& '.\.tools\android-sdk\platform-tools\adb.exe' -s emulator-5554 shell reboot -p
+& "$env:ANDROID_HOME/platform-tools/adb.exe" -s emulator-5554 shell settings put global http_proxy :0
+& "$env:ANDROID_HOME/platform-tools/adb.exe" -s emulator-5554 shell reboot -p
 ```
 
-生成的 emulator stdout 因早期运行目录锁错误积累过重复日志；模拟器停止后已保留注明范围的末尾摘要，将约 298 MB 的生成日志缩减为约 5.6 KB。它不是完整运行日志。
+生成的 emulator stdout 因早期运行目录锁错误积累过重复日志；模拟器停止后已保留注明范围的末尾摘要，不是完整运行日志。该摘要随本地 `.tools/` 清理一并删除。
 
 ## 年龄确认遥控回归（2026 年 11 月 13 日）
 

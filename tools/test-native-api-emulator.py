@@ -13,28 +13,30 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from android_env import adb
+
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = "app.bahaplus.tv.nativeapi"
 COMPONENT = PACKAGE + "/app.bahaplus.tv.experiment.NativeApiActivity"
-EXPECTED_AVD = "BahaNativeApiGuest_API29"
 OUTPUT = ROOT / "artifacts/performance/native-api"
 sys.stdout.reconfigure(encoding="utf-8")
 
 
 class GuestTest:
-    def __init__(self, serial, port):
-        if serial != "emulator-5592" or port != 5071:
-            raise ValueError("This test is restricted to the dedicated native API emulator.")
-        self.prefix = [str(ROOT / ".tools/android-sdk/platform-tools/adb.exe"),
-                       "-P", str(port), "-s", serial]
+    def __init__(self, serial, port, expected_avd):
+        if not re.fullmatch(r"emulator-\d+", serial):
+            raise ValueError("This test is restricted to an explicitly selected emulator.")
+        self.prefix = [adb(), "-P", str(port), "-s", serial]
         names = [self.adb("shell", "getprop", key).strip() for key in
                  ("ro.kernel.qemu.avd_name", "ro.boot.qemu.avd_name")]
         console_name = self.adb("emu", "avd", "name").splitlines()
         names.extend(console_name[:1])
-        if EXPECTED_AVD not in names:
+        if expected_avd not in names:
             raise RuntimeError("Unexpected AVD identity; no mutation performed.")
         if self.adb("shell", "getprop", "sys.boot_completed").strip() != "1":
             raise RuntimeError("Guest AVD has not completed boot.")
+        self.avd = expected_avd
         OUTPUT.mkdir(parents=True, exist_ok=True)
 
     def adb(self, *args, binary=False):
@@ -233,8 +235,9 @@ def full_episode(test, entry, minimum_duration=0):
 def main():
     global OUTPUT
     parser = argparse.ArgumentParser()
-    parser.add_argument("--serial", default="emulator-5592")
-    parser.add_argument("--port", type=int, default=5071)
+    parser.add_argument("--serial", required=True)
+    parser.add_argument("--expected-avd", default="BahaNativeApiGuest_API29")
+    parser.add_argument("--port", type=int, default=5037)
     parser.add_argument("--video", default="40190")
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--full-episode", action="store_true",
@@ -253,13 +256,13 @@ def main():
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", args.output_name):
             raise ValueError("Invalid evidence directory name.")
         OUTPUT = OUTPUT / args.output_name
-    test = GuestTest(args.serial, args.port)
+    test = GuestTest(args.serial, args.port, args.expected_avd)
     apk = ROOT / "artifacts/BahaPlusTV-native-api-debug.apk"
     if args.install:
         print(test.adb("install", "-r", str(apk)), flush=True)
     environment = {
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
-        "avd": EXPECTED_AVD, "package": PACKAGE,
+        "avd": test.avd, "package": PACKAGE,
         "android_api": test.adb("shell", "getprop", "ro.build.version.sdk").strip(),
         "abi": test.adb("shell", "getprop", "ro.product.cpu.abi").strip(),
         "webview": test.adb("shell", "dumpsys", "webviewupdate"),

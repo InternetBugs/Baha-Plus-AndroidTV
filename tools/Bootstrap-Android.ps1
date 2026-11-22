@@ -1,28 +1,20 @@
 param([switch]$AcceptSdkLicenses)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$toolsRoot = Join-Path $projectRoot '.tools'
-$sdkRoot = Join-Path $toolsRoot 'android-sdk'
-New-Item -ItemType Directory -Force -Path $toolsRoot | Out-Null
+$sdkRoot = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else {
+    throw 'Set ANDROID_HOME to the installed Android SDK before bootstrapping.'
+}
+if (-not (Test-Path -LiteralPath $sdkRoot)) {
+    throw "Android SDK not found at $sdkRoot."
+}
 $env:ANDROID_HOME = $sdkRoot
 $env:ANDROID_SDK_ROOT = $sdkRoot
-$env:ANDROID_USER_HOME = Join-Path $toolsRoot 'android-user'
 $platformReady = Test-Path -LiteralPath (Join-Path $sdkRoot 'platforms\android-36\android.jar')
 $buildToolsReady = Test-Path -LiteralPath (Join-Path $sdkRoot 'build-tools\35.0.0\aapt2.exe')
 if (-not ($platformReady -and $buildToolsReady)) {
     $sdkManager = Join-Path $sdkRoot 'cmdline-tools\latest\bin\sdkmanager.bat'
     if (-not (Test-Path -LiteralPath $sdkManager)) {
-        $archive = Join-Path $toolsRoot 'commandlinetools-win.zip'
-        $uri = 'https://dl.google.com/android/repository/commandlinetools-win-15859902_latest.zip'
-        Invoke-WebRequest -Uri $uri -OutFile $archive
-        $expected = '90ae805d20434428bffcb699c290860f19bb5f66a67e6b330067e3de801fb04a'
-        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
-            throw 'Android command line tools checksum mismatch.'
-        }
-        $unpack = Join-Path $toolsRoot 'sdk-unpack'
-        Expand-Archive -LiteralPath $archive -DestinationPath $unpack -Force
-        New-Item -ItemType Directory -Force -Path (Join-Path $sdkRoot 'cmdline-tools\latest') | Out-Null
-        Copy-Item -Path (Join-Path $unpack 'cmdline-tools\*') -Destination (Join-Path $sdkRoot 'cmdline-tools\latest') -Recurse -Force
+        throw "Missing $sdkManager. Install the Android command line tools in $sdkRoot first."
     }
     if ($AcceptSdkLicenses) {
         1..50 | ForEach-Object { 'y' } | & $sdkManager "--sdk_root=$sdkRoot" --licenses

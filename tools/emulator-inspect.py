@@ -13,14 +13,16 @@ import sys
 import xml.etree.ElementTree as ET
 
 sys.stdout.reconfigure(encoding="utf-8")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from android_env import adb, connected_emulators
+
 ROOT = Path(__file__).resolve().parent.parent
-ADB = ROOT / ".tools/android-sdk/platform-tools/adb.exe"
 OUTPUT = ROOT / "artifacts/emulator"
 
 
 def run(serial, *arguments, binary=False):
     result = subprocess.run(
-        [str(ADB), "-s", serial, *arguments],
+        [adb(), "-s", serial, *arguments],
         capture_output=True, timeout=45, check=True,
     )
     return result.stdout if binary else result.stdout.decode("utf-8", errors="replace")
@@ -100,7 +102,7 @@ def stats(serial, label):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--serial", default="emulator-5554")
+    parser.add_argument("--serial", help="Defaults to the only connected emulator.")
     commands = parser.add_subparsers(dest="command", required=True)
     capture_parser = commands.add_parser("capture")
     capture_parser.add_argument("label")
@@ -110,6 +112,11 @@ def main():
     commands.add_parser("launch")
     commands.add_parser("info")
     args = parser.parse_args()
+    if not args.serial:
+        devices = connected_emulators(adb())
+        if len(devices) != 1:
+            parser.error(f"Expected exactly one connected emulator, found {devices}. Pass --serial.")
+        args.serial = devices[0]
     if not args.serial.startswith("emulator-"):
         parser.error("This helper operates on emulator serials only")
     if args.command == "capture":

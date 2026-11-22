@@ -18,10 +18,6 @@ if (-not (Test-Path -LiteralPath (Join-Path $sdkRoot 'platforms\android-36\andro
 }
 $env:ANDROID_HOME = $sdkRoot
 $env:ANDROID_SDK_ROOT = $sdkRoot
-$env:ANDROID_USER_HOME = Join-Path $projectRoot '.tools\android-user'
-$env:GRADLE_USER_HOME = Join-Path $projectRoot '.tools\gradle-home'
-$readOnlyCache = Join-Path $env:USERPROFILE '.gradle\caches'
-if (Test-Path -LiteralPath (Join-Path $readOnlyCache 'modules-2')) { $env:GRADLE_RO_DEP_CACHE = $readOnlyCache }
 $cachedGradleRoot = Join-Path $env:USERPROFILE '.gradle\wrapper\dists\gradle-8.14.3-bin'
 $cachedGradle = Get-ChildItem -LiteralPath $cachedGradleRoot -Filter 'gradle.bat' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 $command = if ($cachedGradle) { $cachedGradle.FullName } else { Join-Path $projectRoot 'gradlew.bat' }
@@ -31,10 +27,21 @@ if ($Offline) { $arguments += '--offline' }
 if ($LASTEXITCODE -ne 0) { throw 'Android checks/build failed.' }
 $artifactDirectory = Join-Path $projectRoot 'artifacts'
 New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
-$artifactName = 'BahaPlusTV-0.3.1-debug.apk'
+$builtApk = Join-Path $projectRoot 'app\build\outputs\apk\debug\app-debug.apk'
+$aapt2 = Join-Path $sdkRoot 'build-tools\35.0.0\aapt2.exe'
+$badging = (& $aapt2 dump badging $builtApk) -join "`n"
+$versionName = if ($badging -match "versionName='([^']+)'") { $Matches[1] } else { throw 'Cannot read versionName from the debug APK.' }
+$artifactName = "BahaPlusTV-$versionName-debug.apk"
 $artifact = Join-Path $artifactDirectory $artifactName
-Copy-Item -LiteralPath (Join-Path $projectRoot 'app\build\outputs\apk\debug\app-debug.apk') -Destination $artifact -Force
-$checksum = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+Copy-Item -LiteralPath $builtApk -Destination $artifact -Force
+$stream = [IO.File]::OpenRead($artifact)
+try {
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    $checksum = (-join ($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }))
+} finally {
+    if ($sha256) { $sha256.Dispose() }
+    $stream.Dispose()
+}
 "$checksum  $artifactName" | Set-Content -LiteralPath "$artifact.sha256" -Encoding ascii
 Write-Output "APK: $artifact"
 Write-Output "SHA-256: $checksum"

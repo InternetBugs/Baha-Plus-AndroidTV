@@ -107,6 +107,6 @@
 - 实际方向键向下跨过评分表进入集数，再向右移动至第 6 集；详情及选集截图的应用 WebView 数量均为 0。
 - 测试模拟器直连存在 DNS／网络问题，最终使用主机既有的网络代理读取真实 HTTPS 服务；应用协议和证书验证未改变。此结果不代替目标 ARM 电视的验收。
 
-截图及焦点证据位于忽略目录 `artifacts/performance/rating-*.png`／`.json`；隔离构建记录为 `.tools/rating-isolated-final-build.log`。本地调试包为 `artifacts/BahaPlusTV-0.3.1-rating-debug.apk`，校验值见相邻 `.sha256`。版本号仍为 0.3.1／versionCode 4，未新增正式发布；测试包只叠加本次评分功能，不包含工作区同时进行的其他功能改动。
+截图及焦点证据位于忽略目录 `artifacts/performance/rating-*.png`／`.json`；隔离构建记录为 `.tools/rating-isolated-final-build.log`。本地调试包为 `artifacts/BahaPlusTV-0.3.1-rating-debug.apk`，校验值见相邻 `.sha256`。版本号仍为 0.3.1／versionCode 4，未新增正式发布；测试包只叠加本次评分功能，不包含工作区同时进行的其他功能改动。这些本机文件已在 2026-11-22 清理本地模拟器与测试产物时删除。
 
 最终 APK 为 7,366,068 字节，SHA-256：`40f06ed3f52b5975cdb57dec0b2ebfe498a63bd5a04bf0ac24e59f866873e160`。

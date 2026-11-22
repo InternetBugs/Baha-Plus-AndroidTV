@@ -131,20 +131,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/Build-NativeApi.ps1 -O
 
 推送前另从 `2f3777c` 导出纯净副本，仅加入上述原生实验文件及构建类型，执行相同的 Gradle 检查与打包任务，44 项 JVM 测试全部通过，其中 10 项为实验测试；Lint 为 0 错误、12 项警告，APK 构建成功。此副本未重复整集实播，24 分钟结果仍对应上表记录的实测 APK。
 
-运行测试前，使用新的空白 API 29 x86 AVD，名称设为 `BahaNativeApiGuest_API29`。将它置于单独的 `ANDROID_AVD_HOME`，使用独立的 `ANDROID_USER_HOME`／`ANDROID_EMULATOR_HOME`，以 `-ports 5592,5593 -no-window -no-audio -no-snapshot -gpu swiftshader` 启动，并将 `ANDROID_ADB_SERVER_PORT` 设为 5071。不可从已有账号实例复制 userdata，也不可借用其端口。
+运行测试前，准备一个空白 API 29 x86 访客 AVD。AVD 现在由本机全局安装管理（`%USERPROFILE%\.android\avd`），当时的独立实例 `BahaNativeApiGuest_API29` 与专用端口已随本地 `.tools/` 清理删除。以 `-no-window -no-audio -no-snapshot -gpu swiftshader` 启动后，用 `--serial` 与 `--expected-avd` 显式指定目标，脚本不会猜测设备。不可从已有账号实例复制 userdata，也不可借用其端口。
 
 ```powershell
-python -X utf8 tools/test-native-api-emulator.py --install
-python -X utf8 tools/test-native-api-emulator.py --install --video 40191 --output-name episode-40191
-python -B -X utf8 tools/test-native-api-emulator.py --install --video 40190 --full-episode --output-name full-episode-40190-final
-python -B -X utf8 tools/test-native-api-emulator.py --install --video 30008 --full-episode --minimum-duration-seconds 1440 --output-name full-episode-30008-24min
+python -X utf8 tools/test-native-api-emulator.py --serial emulator-5554 --expected-avd <AVD 名称> --install
+python -X utf8 tools/test-native-api-emulator.py --serial emulator-5554 --expected-avd <AVD 名称> --install --video 40191 --output-name episode-40191
+python -B -X utf8 tools/test-native-api-emulator.py --serial emulator-5554 --expected-avd <AVD 名称> --install --video 40190 --full-episode --output-name full-episode-40190-final
+python -B -X utf8 tools/test-native-api-emulator.py --serial emulator-5554 --expected-avd <AVD 名称> --install --video 30008 --full-episode --minimum-duration-seconds 1440 --output-name full-episode-30008-24min
 ```
 
-[`test-native-api-emulator.py`](../tools/test-native-api-emulator.py) 固定核对上述 AVD 名称、端口及启动状态，随后才安装和操作独立包。所有界面动作均使用遥控按键。脚本读取包内已脱敏的证据，校验正片推进、暂停、快进、倍速、后台状态、后续定时进度回报、运行时 WebView 数量和崩溃计数。
+[`test-native-api-emulator.py`](../tools/test-native-api-emulator.py) 从 `ANDROID_HOME` 解析 `adb`，核对传入的 `--serial`、`--expected-avd` 与设备实际 AVD 名称、启动状态，随后才安装和操作独立包。所有界面动作均使用遥控按键。脚本读取包内已脱敏的证据，校验正片推进、暂停、快进、倍速、后台状态、后续定时进度回报、运行时 WebView 数量和崩溃计数。
 
 `--full-episode` 使用单独的连续播放路径：从片头以 1 倍速播放，正片期间不发送控制按键；核对每次采样均无跳转或倍速变化，等待自然结束及结束后的进度 `ok`。脚本同时检查媒体时间、实际观看累计与墙钟时间，避免将快进或加速播放算成整集通过。运行期间保存连续状态、脱敏事件和每分钟一次的应用进程内存采样。`--minimum-duration-seconds 1440` 另要求实际清单达到 24 分钟，避免误选短篇。
 
-本机证据保存在 `artifacts/performance/native-api/`，第二集位于其 `episode-40191/` 子目录：
+本机证据保存在 `artifacts/performance/native-api/`，第二集位于其 `episode-40191/` 子目录。该目录已在 2026-11-22 清理本地测试产物时删除，以下清单为当时内容：
 
 - `environment.json`：系统、WebView、ABI 和 APK 校验值。
 - `content-entry.json`、`pause.json`、`seek.json`、`speed.json`、`background.json`：各阶段状态。
@@ -153,15 +153,15 @@ python -B -X utf8 tools/test-native-api-emulator.py --install --video 30008 --fu
 - `cookie-comparison.json`：独立宿主访客的 Cookie 格式比较，仅含名称和结果。
 - `memory-sample.json`、`cleanup.json`：最后一次内存采样及代理清除、实例关机结果。
 
-这些本机产物被 Git 忽略，未包含 Cookie、设备标识、带会话的媒体 URL、原始网络响应或 logcat。构建测试报告位于 `app/build/test-results/testNativeApiUnitTest/` 与 `app/build/reports/lint-results-nativeApi.html`。
+这些本机产物被 Git 忽略，未包含 Cookie、设备标识、带会话的媒体 URL、原始网络响应或 logcat；删除前没有上传。构建测试报告位于 `app/build/test-results/testNativeApiUnitTest/` 与 `app/build/reports/lint-results-nativeApi.html`。
 
 本次已强制停止实验包，将测试实例代理清除并回读为 `:0`，随后正常关机并确认其控制台端口关闭。复测结束后同样执行：
 
 ```powershell
-& .\.tools\android-sdk\platform-tools\adb.exe -P 5071 -s emulator-5592 shell am force-stop app.bahaplus.tv.nativeapi
-& .\.tools\android-sdk\platform-tools\adb.exe -P 5071 -s emulator-5592 shell settings put global http_proxy :0
-& .\.tools\android-sdk\platform-tools\adb.exe -P 5071 -s emulator-5592 shell settings get global http_proxy
-& .\.tools\android-sdk\platform-tools\adb.exe -P 5071 -s emulator-5592 shell reboot -p
+& "$env:ANDROID_HOME/platform-tools/adb.exe" -P 5037 -s emulator-5554 shell am force-stop app.bahaplus.tv.nativeapi
+& "$env:ANDROID_HOME/platform-tools/adb.exe" -P 5037 -s emulator-5554 shell settings put global http_proxy :0
+& "$env:ANDROID_HOME/platform-tools/adb.exe" -P 5037 -s emulator-5554 shell settings get global http_proxy
+& "$env:ANDROID_HOME/platform-tools/adb.exe" -P 5037 -s emulator-5554 shell reboot -p
 ```
 
 ## 后续验收范围
