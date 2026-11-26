@@ -6,7 +6,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.os.Handler
@@ -21,9 +20,6 @@ import androidx.core.content.FileProvider
 import app.bahaplus.tv.core.Preferences
 import app.bahaplus.tv.diagnostics.Diagnostics
 import app.bahaplus.tv.diagnostics.FeedbackServer
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.EncodeHintType
-import com.google.zxing.qrcode.QRCodeWriter
 import java.io.File
 import java.net.Inet4Address
 import java.util.concurrent.Executors
@@ -110,9 +106,13 @@ class DiagnosticsView(
 
     private fun enableActions() {
         toggle.isEnabled = !busy
+        toggle.isFocusable = !busy
         preview.isEnabled = !busy && hasLog
+        preview.isFocusable = !busy && hasLog
         send.isEnabled = !busy && hasLog
+        send.isFocusable = !busy && hasLog
         clear.isEnabled = !busy && (hasLog || Diagnostics.failed)
+        clear.isFocusable = !busy && (hasLog || Diagnostics.failed)
     }
 
     private fun toggleRecording() {
@@ -137,29 +137,39 @@ class DiagnosticsView(
             if (disposed) return@preview
             refresh()
             result.onSuccess { text ->
-                val scroll = ScrollView(context).apply { isFocusable = true }
-                scroll.addView(TvStyle.label(context, text, 15f).apply {
-                    setPadding(dp(20), dp(14), dp(20), dp(14))
-                })
-                dialog = AlertDialog.Builder(context).setTitle(tr("最近日志预览", "最近日誌預覽"))
-                    .setView(scroll)
-                    .setPositiveButton(tr("复制预览", "複製預覽")) { _, _ ->
-                        (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                            .setPrimaryClip(ClipData.newPlainText("Baha Plus TV log", text))
-                    }.setNegativeButton(tr("返回", "返回"), null).show()
+                dialog = TvDialog.text(
+                    context = context,
+                    title = tr("最近日志预览", "最近日誌預覽"),
+                    body = text,
+                    actions = listOf(
+                        TvDialog.Action(tr("复制预览", "複製預覽")) {
+                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                                .setPrimaryClip(ClipData.newPlainText("Baha Plus TV log", text))
+                        },
+                        TvDialog.Action(tr("返回", "返回"), primary = true)
+                    ),
+                    focusIndex = 1
+                )
             }
         }
     }
 
     private fun clearLog() {
         if (busy) return
-        dialog = AlertDialog.Builder(context).setTitle(tr("清除日志？", "清除日誌？"))
-            .setMessage(tr("会停止记录，并删除电视上保存的日志和导出文件。", "將停止記錄，並刪除電視上儲存的日誌與匯出檔案。"))
-            .setPositiveButton(tr("清除", "清除")) { _, _ ->
-                busy = true
-                enableActions()
-                Diagnostics.clear { if (!disposed) refresh() }
-            }.setNegativeButton(tr("取消", "取消"), null).show()
+        dialog = TvDialog.confirm(
+            context = context,
+            title = tr("清除日志？", "清除日誌？"),
+            message = tr("会停止记录，并删除电视上保存的日志和导出文件。", "將停止記錄，並刪除電視上儲存的日誌與匯出檔案。"),
+            actions = listOf(
+                TvDialog.Action(tr("取消", "取消")),
+                TvDialog.Action(tr("清除", "清除"), primary = true) {
+                    busy = true
+                    enableActions()
+                    Diagnostics.clear { if (!disposed) refresh() }
+                }
+            ),
+            focusIndex = 0
+        )
     }
 
     private fun exportLog() {
@@ -191,13 +201,18 @@ class DiagnosticsView(
         val text = TvStyle.label(context, tr("正在准备…", "正在準備…"), 16f)
         body.addView(text, LayoutParams(0, -2, 1f))
         val scroll = ScrollView(context).apply { addView(body) }
-        val transferDialog = AlertDialog.Builder(context).setTitle(tr("用手机发送反馈", "用手機傳送回報"))
-            .setView(scroll)
-            .setNeutralButton(tr("系统分享文件", "系統分享檔案")) { _, _ -> shareFile(file) }
-            .setPositiveButton(tr("关闭", "關閉"), null).create()
+        val transferDialog = TvDialog.showCustom(
+            context = context,
+            title = tr("用手机发送反馈", "用手機傳送回報"),
+            contentView = scroll,
+            actions = listOf(
+                TvDialog.Action(tr("系统分享文件", "系統分享檔案"), dismiss = false) { shareFile(file) },
+                TvDialog.Action(tr("关闭", "關閉"), primary = true)
+            ),
+            focusIndex = 1,
+            onDismiss = { stopTransfer() }
+        )
         dialog = transferDialog
-        transferDialog.setOnDismissListener { stopTransfer() }
-        transferDialog.show()
         keepScreenOn = true
         transferWorker.execute {
             val result = runCatching {
@@ -206,7 +221,7 @@ class DiagnosticsView(
                     ?.map { it.address }?.filterIsInstance<Inet4Address>()
                     ?.firstOrNull { it.isSiteLocalAddress && !it.isLoopbackAddress }
                     ?: error("no-lan-address")
-                FeedbackServer(address, file.readBytes(), onClosed = {
+                val created = FeedbackServer(address, file.readBytes(), onClosed = {
                     main.post {
                         if (!disposed && expected == generation) {
                             keepScreenOn = false
@@ -216,20 +231,22 @@ class DiagnosticsView(
                         }
                     }
                 })
+                val qr = try {
+                    QrCodeBitmap.encode(created.url)
+                } catch (error: Exception) {
+                    created.close()
+                    throw error
+                }
+                created to qr
             }
             main.post {
                 if (disposed || expected != generation || !transferDialog.isShowing) {
-                    result.getOrNull()?.close()
+                    result.getOrNull()?.first?.close()
                     return@post
                 }
-                result.onSuccess { value ->
+                result.onSuccess { (value, qr) ->
                     server = value
-                    val matrix = QRCodeWriter().encode(value.url, BarcodeFormat.QR_CODE, 420, 420,
-                        mapOf(EncodeHintType.MARGIN to 4))
-                    val pixels = IntArray(matrix.width * matrix.height) { index ->
-                        if (matrix[index % matrix.width, index / matrix.width]) Color.BLACK else Color.WHITE
-                    }
-                    image.setImageBitmap(Bitmap.createBitmap(pixels, matrix.width, matrix.height, Bitmap.Config.RGB_565))
+                    image.setImageDrawable(QrCodeBitmap.drawable(resources, qr))
                     image.visibility = VISIBLE
                     text.text = tr(
                         "手机和电视连接同一局域网后扫码。\n下载日志，再前往 GitHub 填写问题并附上文件（需 GitHub 账号），或用你已有的联系方式发给开发者。\n\n保持此窗口打开，链接 10 分钟有效。\n${value.url}",

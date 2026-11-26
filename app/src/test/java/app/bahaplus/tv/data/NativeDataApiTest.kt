@@ -253,6 +253,25 @@ class NativeDataApiTest {
         }.code)
     }
 
+    @Test fun identityWithPageReusesInitialCollectionDocumentDuringAccountSync() {
+        val requests = mutableListOf<String>()
+        val session = OfficialHttpSession(openConnection = { uri ->
+            requests += uri.path
+            Response(uri, when {
+                uri.path.endsWith("history.php") -> """{"data":{"totalPage":0,"history":[]}}"""
+                else -> collectionPage("owner") + card("1")
+            })
+        })
+        val api = NativeAccountApi(session)
+        val (identity, firstPage) = api.identityWithPage()!!
+        assertEquals(OfficialIdentity("owner", "owner"), identity)
+        assertEquals(listOf("/mygather.php"), requests)
+        val account = api.account(identity.id, firstPage)!!
+        assertEquals(listOf("1"), account.favorites.map { it.id })
+        // Only 1 initial fetch + history + 1 final profile verification (no redundant middle /mygather.php).
+        assertEquals(2, requests.count { it == "/mygather.php" })
+    }
+
     @Test fun dataSyncRejectsAChangedOwnerBeforeFetchingCollectionsOrHistory() {
         val paths = mutableListOf<String>()
         val session = OfficialHttpSession(openConnection = { uri ->

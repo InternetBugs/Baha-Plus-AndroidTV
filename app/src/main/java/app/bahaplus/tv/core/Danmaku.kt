@@ -59,13 +59,52 @@ class DanmakuTimeline(private val items: List<Danmaku>) {
         // occupied a lane earlier in the visible window but have now expired.
         while (cursor < items.size && items[cursor].timeMs <= position) {
             val item = items[cursor++]
-            visible.removeAll { it.endMs <= item.timeMs }
-            val candidates = if (item.mode == DanmakuMode.BOTTOM) (count - 1 downTo 0)
-                else (0 until count)
-            val lane = candidates.firstOrNull { candidate -> visible.none { it.lane == candidate } }
+            pruneExpired(item.timeMs)
+            val lane = findLane(item, count)
             if (lane != null) visible += DanmakuPlacement(item, lane)
         }
-        visible.removeAll { it.endMs <= position }
+        pruneExpired(position)
+    }
+
+    private fun pruneExpired(nowMs: Long) {
+        var index = visible.size - 1
+        while (index >= 0) {
+            if (visible[index].endMs <= nowMs) visible.removeAt(index)
+            index--
+        }
+    }
+
+    private fun findLane(item: Danmaku, count: Int): Int? {
+        if (count <= 0) return null
+        if (item.mode == DanmakuMode.BOTTOM) {
+            for (candidate in count - 1 downTo 0) {
+                if (laneAvailable(candidate, item)) return candidate
+            }
+            return null
+        }
+        for (candidate in 0 until count) {
+            if (laneAvailable(candidate, item)) return candidate
+        }
+        return null
+    }
+
+    /**
+     * Rolling messages release their lane entry once the prior rolling comment has safely
+     * cleared the right edge + catch-up margin (ROLLING_ENTRY_COOLDOWN_MS). Fixed TOP/BOTTOM
+     * comments keep their lane exclusively for their entire 5s lifetime.
+     */
+    private fun laneAvailable(lane: Int, incoming: Danmaku): Boolean {
+        for (index in visible.indices) {
+            val existing = visible[index]
+            if (existing.lane != lane) continue
+            if (incoming.mode != DanmakuMode.ROLLING || existing.item.mode != DanmakuMode.ROLLING) {
+                return false
+            }
+            if (incoming.timeMs - existing.item.timeMs < ROLLING_ENTRY_COOLDOWN_MS) {
+                return false
+            }
+        }
+        return true
     }
 
     fun nextChangeMs(): Long? {
@@ -82,5 +121,10 @@ class DanmakuTimeline(private val items: List<Danmaku>) {
             if (items[middle].timeMs < position) low = middle + 1 else high = middle
         }
         return low
+    }
+
+    companion object {
+        const val ROLLING_ENTRY_COOLDOWN_MS = 3_500L
+        const val MAX_PER_LANE = 3
     }
 }

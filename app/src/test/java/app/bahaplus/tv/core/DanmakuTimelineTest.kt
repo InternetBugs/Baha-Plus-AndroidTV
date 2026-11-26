@@ -50,11 +50,29 @@ class DanmakuTimelineTest {
     @Test fun crowdedEpisodeHasBoundedVisibleWorkAndZeroLanesAreAllowed() {
         val timeline = DanmakuTimeline((1..20_000).map { item("$it", it.toLong()) })
         timeline.update(20_000, 6)
-        assertTrue(timeline.active.size <= 6)
+        assertTrue(timeline.active.size <= 6 * DanmakuTimeline.MAX_PER_LANE)
         timeline.update(20_000, 0)
         assertTrue(timeline.active.isEmpty())
         timeline.update(20_000, 12)
-        assertTrue(timeline.active.size <= 12)
+        assertTrue(timeline.active.size <= 12 * DanmakuTimeline.MAX_PER_LANE)
+    }
+
+    @Test fun rollingCommentsReuseLanesAfterSafeClearanceWithoutCollidingWithFixedModes() {
+        val rolling = DanmakuTimeline(listOf(
+            item("1", 0),
+            item("2", 2_000),
+            item("3", DanmakuTimeline.ROLLING_ENTRY_COOLDOWN_MS)
+        ))
+        rolling.update(DanmakuTimeline.ROLLING_ENTRY_COOLDOWN_MS, 1)
+        assertEquals(listOf("1", "3"), rolling.active.map { it.item.id })
+        assertEquals(listOf(0, 0), rolling.active.map { it.lane })
+
+        val mixed = DanmakuTimeline(listOf(
+            item("top", 0, DanmakuMode.TOP),
+            item("roll", DanmakuTimeline.ROLLING_ENTRY_COOLDOWN_MS, DanmakuMode.ROLLING)
+        ))
+        mixed.update(DanmakuTimeline.ROLLING_ENTRY_COOLDOWN_MS, 1)
+        assertEquals(listOf("top"), mixed.active.map { it.item.id })
     }
 
     @Test fun settingsFilterOnlyEnabledModes() {

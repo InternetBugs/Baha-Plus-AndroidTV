@@ -21,13 +21,18 @@ internal class DanmakuView(
     private val player: Player,
     private val lowResources: Boolean
 ) : View(context) {
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFakeBoldText = true }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        isFakeBoldText = true
+        strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
+    }
     private val density = resources.displayMetrics.density
+    private val maxWidthEntries = if (lowResources) 64 else 128
     private var settings = DanmakuSettings()
     private var items = emptyList<Danmaku>()
     private var timeline = DanmakuTimeline(emptyList())
-    private val widths = object : LinkedHashMap<String, Float>(64, .75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Float>?) = size > 64
+    private val widths = object : LinkedHashMap<String, Float>(maxWidthEntries, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Float>?) = size > maxWidthEntries
     }
     private var contentActive = false
     private var foreground = true
@@ -36,6 +41,12 @@ internal class DanmakuView(
     private var laneHeight = 1f
     private var laneCount = 0
     private val frame = Runnable { refresh() }
+    /** In low-resource mode, skip every other vsync to hold a steady 30fps without 20fps drift. */
+    private val skipFrame = Runnable {
+        if (!disposed && isAttachedToWindow && contentActive && foreground && settings.enabled && player.isPlaying) {
+            postOnAnimation(frame)
+        }
+    }
 
     init {
         isFocusable = false
@@ -72,6 +83,7 @@ internal class DanmakuView(
 
     fun refresh(discontinuity: Boolean = false) {
         removeCallbacks(frame)
+        removeCallbacks(skipFrame)
         if (disposed || !isAttachedToWindow) return
         if (!contentActive || !foreground || !settings.enabled) {
             visibility = GONE
@@ -84,7 +96,7 @@ internal class DanmakuView(
         if (!player.isPlaying || laneCount == 0) return
         val rolling = timeline.active.any { it.item.mode == DanmakuMode.ROLLING }
         if (rolling) {
-            postOnAnimationDelayed(frame, if (lowResources) 32L else 16L)
+            postOnAnimation(if (lowResources) skipFrame else frame)
         } else {
             // Fixed comments repaint only at entry/expiry. Empty intervals sleep.
             val next = timeline.nextChangeMs() ?: return
@@ -100,6 +112,7 @@ internal class DanmakuView(
 
     override fun onDetachedFromWindow() {
         removeCallbacks(frame)
+        removeCallbacks(skipFrame)
         super.onDetachedFromWindow()
     }
 
@@ -144,6 +157,7 @@ internal class DanmakuView(
     fun release() {
         disposed = true
         removeCallbacks(frame)
+        removeCallbacks(skipFrame)
         items = emptyList()
         timeline = DanmakuTimeline(emptyList())
         widths.clear()

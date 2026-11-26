@@ -86,6 +86,18 @@ object UpdateSchedule {
         calendar.timeInMillis = now
         return (calendar.get(java.util.Calendar.DAY_OF_WEEK) + 6) % 7
     }
+    /** Current Taipei clock in minutes since 00:00 (0..1439). */
+    fun taipeiMinutesOfDay(now: Long = System.currentTimeMillis()): Int {
+        val calendar = java.util.Calendar.getInstance(taipei)
+        calendar.timeInMillis = now
+        return calendar.get(java.util.Calendar.HOUR_OF_DAY) * 60 + calendar.get(java.util.Calendar.MINUTE)
+    }
+    fun parseMinutes(time: String?): Int? {
+        if (time == null || time.length != 5 || time[2] != ':') return null
+        val hour = time.substring(0, 2).toIntOrNull() ?: return null
+        val minute = time.substring(3, 5).toIntOrNull() ?: return null
+        return if (hour in 0..23 && minute in 0..59) hour * 60 + minute else null
+    }
     fun day(catalog: List<Anime>, weekday: Int): List<Anime> {
         require(weekday in 0..6)
         return catalog.filter { it.updateDay == weekday && "season" in it.sections }

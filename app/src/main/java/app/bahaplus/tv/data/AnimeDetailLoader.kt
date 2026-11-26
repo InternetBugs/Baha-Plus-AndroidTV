@@ -16,7 +16,9 @@ internal class AnimeDetailLoader(
     private class Request(val client: OfficialAnimeApi) {
         var future: Future<*>? = null
     }
-    private val executor = ThreadPoolExecutor(0, 2, 5, TimeUnit.SECONDS, LinkedBlockingQueue())
+    private val executor = ThreadPoolExecutor(2, 2, 10, TimeUnit.SECONDS, LinkedBlockingQueue()).apply {
+        allowCoreThreadTimeOut(true)
+    }
     @Volatile private var current: Request? = null
     @Volatile private var closed = false
 

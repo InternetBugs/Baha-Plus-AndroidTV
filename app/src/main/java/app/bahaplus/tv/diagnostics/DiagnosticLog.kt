@@ -91,11 +91,11 @@ class DiagnosticLog(private val directory: File, private val partBytes: Int = 25
     }
 
     private fun safeField(key: String, value: Any): String? = when (key) {
-        "screen" -> (value as? String)?.takeIf { it in setOf("home", "search", "favorites", "history", "settings") }
+        "screen" -> (value as? String)?.takeIf { it in setOf("home", "schedule", "search", "favorites", "history", "settings") }
         "purpose" -> (value as? String)?.takeIf { it in setOf("HOME", "LOGIN", "QR_LOGIN", "PLAY") }
         "phase" -> (value as? String)?.takeIf { it in setOf("content", "age", "advertisement", "error", "loading", "idle",
             "direct", "enabled", "compiled", "cached", "failed", "page", "device", "metadata", "policy",
-            "ad-config", "ad-start", "ad-end", "source", "device-lock", "video-start", "playback-state", "progress") }
+            "ad-config", "ad-start", "ad-end", "source", "device-lock", "video-start", "playback-state", "progress", "danmaku") }
         "code" -> (value as? String)?.takeIf {
             it in ERROR_CODES || Regex("media-[0-9]{4,6}").matches(it)
         }

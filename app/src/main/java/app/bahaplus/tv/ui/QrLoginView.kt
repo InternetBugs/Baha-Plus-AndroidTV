@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.drawable.BitmapDrawable
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -12,9 +11,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import app.bahaplus.tv.core.Preferences
 import app.bahaplus.tv.core.QrLoginCode
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.EncodeHintType
-import com.google.zxing.qrcode.QRCodeWriter
 
 /** The authorization URL is rendered locally and never sent to a QR image service. */
 @SuppressLint("ViewConstructor") // Constructed in code with explicit action callbacks.
@@ -79,13 +75,9 @@ class QrLoginView(
 
     fun ready(value: QrLoginCode) {
         clearCode()
-        val matrix = QRCodeWriter().encode(value.link, BarcodeFormat.QR_CODE, 512, 512,
-            mapOf(EncodeHintType.MARGIN to 4))
-        val pixels = IntArray(matrix.width * matrix.height) { index ->
-            if (matrix[index % matrix.width, index / matrix.width]) Color.BLACK else Color.WHITE
-        }
-        bitmap = Bitmap.createBitmap(pixels, matrix.width, matrix.height, Bitmap.Config.RGB_565)
-        image.setImageDrawable(BitmapDrawable(resources, bitmap).apply { isFilterBitmap = false })
+        val encoded = QrCodeBitmap.encode(value.link)
+        bitmap = encoded
+        image.setImageDrawable(QrCodeBitmap.drawable(resources, encoded))
         image.visibility = VISIBLE
         code = value
         updateCountdown.run()

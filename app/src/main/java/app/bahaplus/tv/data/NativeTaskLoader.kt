@@ -8,7 +8,9 @@ import java.util.concurrent.TimeUnit
 /** One replaceable operation. Cancellation also retires UI callbacks already queued. */
 internal class NativeTaskLoader(private val deliver: (() -> Unit) -> Unit) {
     private class Request(val session: OfficialHttpSession) { var future: Future<*>? = null }
-    private val executor = ThreadPoolExecutor(0, 2, 5, TimeUnit.SECONDS, LinkedBlockingQueue())
+    private val executor = ThreadPoolExecutor(2, 2, 10, TimeUnit.SECONDS, LinkedBlockingQueue()).apply {
+        allowCoreThreadTimeOut(true)
+    }
     @Volatile private var current: Request? = null
     @Volatile private var closed = false
 

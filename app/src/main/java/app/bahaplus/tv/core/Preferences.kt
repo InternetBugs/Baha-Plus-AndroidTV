@@ -1,6 +1,7 @@
 package app.bahaplus.tv.core
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 
 class Preferences(context: Context) {
@@ -36,6 +37,26 @@ class Preferences(context: Context) {
                 .putInt("danmaku.area", value.area).putBoolean("danmaku.rolling", value.rolling)
                 .putBoolean("danmaku.top", value.top).putBoolean("danmaku.bottom", value.bottom).apply()
         }
+    val recentSearches: List<String>
+        get() = runCatching {
+            val array = JSONArray(store.getString("recentSearches", "[]") ?: "[]")
+            (0 until array.length()).mapNotNull { array.optString(it).trim().takeIf(String::isNotEmpty) }.take(MAX_RECENT_SEARCHES)
+        }.getOrDefault(emptyList())
+
+    fun addSearchHistory(query: String) {
+        val cleaned = query.trim()
+        if (cleaned.isEmpty()) return
+        val updated = (listOf(cleaned) + recentSearches.filterNot { it.equals(cleaned, ignoreCase = true) })
+            .take(MAX_RECENT_SEARCHES)
+        val array = JSONArray()
+        updated.forEach(array::put)
+        store.edit().putString("recentSearches", array.toString()).apply()
+    }
+
+    fun clearSearchHistory() {
+        store.edit().remove("recentSearches").apply()
+    }
+
     private val dictionary by lazy {
         JSONObject(context.assets.open("data/search-traditional.json").bufferedReader().use { it.readText() })
     }
@@ -48,5 +69,9 @@ class Preferences(context: Context) {
             offset += Character.charCount(codepoint)
         }
     }
-    fun text(simplified: String, traditional: String) = if (this.traditional) traditional else simplified
+    fun text(simplified: String, traditional: String) = AppStrings.tr(this.traditional, simplified, traditional)
+
+    companion object {
+        private const val MAX_RECENT_SEARCHES = 8
+    }
 }

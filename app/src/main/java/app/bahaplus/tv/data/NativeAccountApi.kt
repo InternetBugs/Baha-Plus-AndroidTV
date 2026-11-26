@@ -16,15 +16,18 @@ internal data class OfficialAccount(val id: String, val name: String, val favori
 /** Inert HTML and official JSON over HTTP; never evaluates page scripts or onclick attributes. */
 internal class NativeAccountApi(private val session: OfficialHttpSession) {
     /** Confirm the session before fetching optional collections/history. */
-    fun identity(): OfficialIdentity? {
+    fun identity(): OfficialIdentity? = identityWithPage()?.first
+
+    /** Same verified identity, returning the first collection document so account() can reuse it. */
+    fun identityWithPage(): Pair<OfficialIdentity, InertHtml>? {
         val first = accountPage() ?: return null
         val profile = profile(first) ?: return null
         session.checkCurrent()
-        return OfficialIdentity(profile.first, session.accountName(profile.first) ?: profile.second)
+        return OfficialIdentity(profile.first, session.accountName(profile.first) ?: profile.second) to first
     }
 
-    fun account(expectedOwner: String? = null): OfficialAccount? {
-        val first = accountPage() ?: return null
+    fun account(expectedOwner: String? = null, firstPage: InertHtml? = null): OfficialAccount? {
+        val first = firstPage ?: accountPage() ?: return null
         val profile = profile(first) ?: return null
         if (expectedOwner != null && !profile.first.equals(expectedOwner, true)) {
             throw NativeApiException("account-stale")
